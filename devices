@@ -1,0 +1,50 @@
+usb-devices
+
+T:  Bus=03 Lev=01 Prnt=01 Port=00 Cnt=01 Dev#=  6 Spd=12  MxCh= 0
+D:  Ver= 2.00 Cls=00(>ifc ) Sub=00 Prot=00 MxPS= 8 #Cfgs=  1
+P:  Vendor=1bb4 ProdID=000a Rev=00.00
+S:  Manufacturer=Satmap Systems Ltd
+S:  Product=active10
+C:  #Ifs= 1 Cfg#= 1 Atr=c0 MxPwr=0mA
+I:  If#= 0 Alt= 0 #EPs= 2 Cls=08(stor.) Sub=06 Prot=50 Driver=usb-storage
+
+active10
+Manufacturer: Satmap Systems Ltd
+Speed: 12Mb/s (full)
+USB Version:  2.00
+Device Class: 00(>ifc )
+Device Subclass: 00
+Device Protocol: 00
+Maximum Default Endpoint Size: 8
+Number of Configurations: 1
+Vendor Id: 1bb4
+Product Id: 000a
+Revision Number:  0.00
+
+Config Number: 1
+	Number of Interfaces: 1
+	Attributes: c0
+	MaxPower Needed:   0mA
+
+	Interface Number: 0
+		Name: usb-storage
+		Alternate Number: 0
+		Class: 08(stor.) 
+		Sub Class: 06
+		Protocol: 50
+		Number of Endpoints: 2
+
+			Endpoint Address: 81
+			Direction: in
+			Attribute: 2
+			Type: Bulk
+			Max Packet Size: 64
+			Interval: 0ms
+
+			Endpoint Address: 02
+			Direction: out
+			Attribute: 2
+			Type: Bulk
+			Max Packet Size: 64
+			Interval: 0ms
+
