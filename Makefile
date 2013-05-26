@@ -13,7 +13,7 @@ CFLAGS += -g
 CFLAGS	+= $(shell pkg-config --cflags $(PACKAGES))
 LDFLAGS += $(shell pkg-config --libs   $(PACKAGES))
 
-all: jim usbmon mmap usb usb_list xusb
+all: jim usbmon mmap usb usb_list xusb bulk
 
 .c.o:
 	$(CC) $(CFLAGS) -c $< -o $@
