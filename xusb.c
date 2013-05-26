@@ -3,40 +3,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-
-#include "libusb.h"
-
-#if defined(_WIN32)
-#define msleep(msecs) Sleep(msecs)
-#else
 #include <unistd.h>
-#define msleep(msecs) usleep(1000*msecs)
-#endif
+#include <libusb.h>
 
-#if !defined(_MSC_VER) || _MSC_VER<=1200
-#define sscanf_s sscanf
-#endif
-
-#if !defined(bool)
 #define bool int
-#endif
-#if !defined(true)
 #define true (1 == 1)
-#endif
-#if !defined(false)
 #define false (!true)
-#endif
-
 
 // Future versions of libusbx will use usb_interface instead of interface
-// in libusb_config_descriptor => catter for that
+// in libusb_config_descriptor => cater for that
 #define usb_interface interface
 
-// Global variables
-bool binary_dump = false;
-bool extra_info = false;
-const char* binary_name = NULL;
-
+/**
+ * perr
+ */
 static int perr(char const *format, ...)
 {
 	va_list args;
@@ -51,7 +31,6 @@ static int perr(char const *format, ...)
 
 #define ERR_EXIT(errcode) do { perr("   %s\n", libusb_error_name((enum libusb_error)errcode)); return -1; } while (0)
 #define CALL_CHECK(fcall) do { r=fcall; if (r < 0) ERR_EXIT(r); } while (0);
-#define B(x) (((x)!=0)?1:0)
 #define be_to_int32(buf) (((buf)[0]<<24)|((buf)[1]<<16)|((buf)[2]<<8)|(buf)[3])
 
 #define RETRY_MAX                     5
@@ -74,7 +53,9 @@ static int perr(char const *format, ...)
 #define BOMS_RESET                    0xFF
 #define BOMS_GET_MAX_LUN              0xFE
 
-// Section 5.1: Command Block Wrapper (CBW)
+/**
+ * Section 5.1: Command Block Wrapper (CBW)
+ */
 struct command_block_wrapper {
 	uint8_t dCBWSignature[4];
 	uint32_t dCBWTag;
@@ -85,7 +66,9 @@ struct command_block_wrapper {
 	uint8_t CBWCB[16];
 };
 
-// Section 5.2: Command Status Wrapper (CSW)
+/**
+ * Section 5.2: Command Status Wrapper (CSW)
+ */
 struct command_status_wrapper {
 	uint8_t dCSWSignature[4];
 	uint32_t dCSWTag;
@@ -93,6 +76,10 @@ struct command_status_wrapper {
 	uint8_t bCSWStatus;
 };
 
+
+/**
+ * cdb_length
+ */
 static uint8_t cdb_length[256] = {
 //	 0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
 	06,06,06,06,06,06,06,06,06,06,06,06,06,06,06,06,  //  0
@@ -113,15 +100,17 @@ static uint8_t cdb_length[256] = {
 	00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,  //  F
 };
 
+
 enum test_type {
 	USE_GENERIC,
-	USE_PS3,
-	USE_XBOX,
 	USE_SCSI,
 	USE_HID,
 } test_mode;
 uint16_t VID, PID;
 
+/**
+ * display_buffer_hex
+ */
 static void display_buffer_hex(unsigned char *buffer, unsigned size)
 {
 	unsigned i, j, k;
@@ -150,137 +139,9 @@ static void display_buffer_hex(unsigned char *buffer, unsigned size)
 	printf("\n" );
 }
 
-// The PS3 Controller is really a HID device that got its HID Report Descriptors
-// removed by Sony
-static int display_ps3_status(libusb_device_handle *handle)
-{
-	int r;
-	uint8_t input_report[49];
-	uint8_t master_bt_address[8];
-	uint8_t device_bt_address[18];
-
-	// Get the controller's bluetooth address of its master device
-	CALL_CHECK(libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN|LIBUSB_REQUEST_TYPE_CLASS|LIBUSB_RECIPIENT_INTERFACE,
-		HID_GET_REPORT, 0x03f5, 0, master_bt_address, sizeof(master_bt_address), 100));
-	printf("\nMaster's bluetooth address: %02X:%02X:%02X:%02X:%02X:%02X\n", master_bt_address[2], master_bt_address[3],
-		master_bt_address[4], master_bt_address[5], master_bt_address[6], master_bt_address[7]);
-
-	// Get the controller's bluetooth address
-	CALL_CHECK(libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN|LIBUSB_REQUEST_TYPE_CLASS|LIBUSB_RECIPIENT_INTERFACE,
-		HID_GET_REPORT, 0x03f2, 0, device_bt_address, sizeof(device_bt_address), 100));
-	printf("\nMaster's bluetooth address: %02X:%02X:%02X:%02X:%02X:%02X\n", device_bt_address[4], device_bt_address[5],
-		device_bt_address[6], device_bt_address[7], device_bt_address[8], device_bt_address[9]);
-
-	// Get the status of the controller's buttons via its HID report
-	printf("\nReading PS3 Input Report...\n");
-	CALL_CHECK(libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN|LIBUSB_REQUEST_TYPE_CLASS|LIBUSB_RECIPIENT_INTERFACE,
-		HID_GET_REPORT, (HID_REPORT_TYPE_INPUT<<8)|0x01, 0, input_report, sizeof(input_report), 1000));
-	switch(input_report[2]){	/** Direction pad plus start, select, and joystick buttons */
-		case 0x01:
-			printf("\tSELECT pressed\n");
-			break;
-		case 0x02:
-			printf("\tLEFT 3 pressed\n");
-			break;
-		case 0x04:
-			printf("\tRIGHT 3 pressed\n");
-			break;
-		case 0x08:
-			printf("\tSTART presed\n");
-			break;
-		case 0x10:
-			printf("\tUP pressed\n");
-			break;
-		case 0x20:
-			printf("\tRIGHT pressed\n");
-			break;
-		case 0x40:
-			printf("\tDOWN pressed\n");
-			break;
-		case 0x80:
-			printf("\tLEFT pressed\n");
-			break;
-	}
-	switch(input_report[3]){	/** Shapes plus top right and left buttons */
-		case 0x01:
-			printf("\tLEFT 2 pressed\n");
-			break;
-		case 0x02:
-			printf("\tRIGHT 2 pressed\n");
-			break;
-		case 0x04:
-			printf("\tLEFT 1 pressed\n");
-			break;
-		case 0x08:
-			printf("\tRIGHT 1 presed\n");
-			break;
-		case 0x10:
-			printf("\tTRIANGLE pressed\n");
-			break;
-		case 0x20:
-			printf("\tCIRCLE pressed\n");
-			break;
-		case 0x40:
-			printf("\tCROSS pressed\n");
-			break;
-		case 0x80:
-			printf("\tSQUARE pressed\n");
-			break;
-	}
-	printf("\tPS button: %d\n", input_report[4]);
-	printf("\tLeft Analog (X,Y): (%d,%d)\n", input_report[6], input_report[7]);
-	printf("\tRight Analog (X,Y): (%d,%d)\n", input_report[8], input_report[9]);
-	printf("\tL2 Value: %d\tR2 Value: %d\n", input_report[18], input_report[19]);
-	printf("\tL1 Value: %d\tR1 Value: %d\n", input_report[20], input_report[21]);
-	printf("\tRoll (x axis): %d Yaw (y axis): %d Pitch (z axis) %d\n",
-			//(((input_report[42] + 128) % 256) - 128),
-			(int8_t)(input_report[42]),
-			(int8_t)(input_report[44]),
-			(int8_t)(input_report[46]));
-	printf("\tAcceleration: %d\n\n", (int8_t)(input_report[48]));
-	return 0;
-}
-// The XBOX Controller is really a HID device that got its HID Report Descriptors
-// removed by Microsoft.
-// Input/Output reports described at http://euc.jp/periphs/xbox-controller.ja.html
-static int display_xbox_status(libusb_device_handle *handle)
-{
-	int r;
-	uint8_t input_report[20];
-	printf("\nReading XBox Input Report...\n");
-	CALL_CHECK(libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN|LIBUSB_REQUEST_TYPE_CLASS|LIBUSB_RECIPIENT_INTERFACE,
-		HID_GET_REPORT, (HID_REPORT_TYPE_INPUT<<8)|0x00, 0, input_report, 20, 1000));
-	printf("   D-pad: %02X\n", input_report[2]&0x0F);
-	printf("   Start:%d, Back:%d, Left Stick Press:%d, Right Stick Press:%d\n", B(input_report[2]&0x10), B(input_report[2]&0x20),
-		B(input_report[2]&0x40), B(input_report[2]&0x80));
-	// A, B, X, Y, Black, White are pressure sensitive
-	printf("   A:%d, B:%d, X:%d, Y:%d, White:%d, Black:%d\n", input_report[4], input_report[5],
-		input_report[6], input_report[7], input_report[9], input_report[8]);
-	printf("   Left Trigger: %d, Right Trigger: %d\n", input_report[10], input_report[11]);
-	printf("   Left Analog (X,Y): (%d,%d)\n", (int16_t)((input_report[13]<<8)|input_report[12]),
-		(int16_t)((input_report[15]<<8)|input_report[14]));
-	printf("   Right Analog (X,Y): (%d,%d)\n", (int16_t)((input_report[17]<<8)|input_report[16]),
-		(int16_t)((input_report[19]<<8)|input_report[18]));
-	return 0;
-}
-
-static int set_xbox_actuators(libusb_device_handle *handle, uint8_t left, uint8_t right)
-{
-	int r;
-	uint8_t output_report[6];
-
-	printf("\nWriting XBox Controller Output Report...\n");
-
-	memset(output_report, 0, sizeof(output_report));
-	output_report[1] = sizeof(output_report);
-	output_report[3] = left;
-	output_report[5] = right;
-
-	CALL_CHECK(libusb_control_transfer(handle, LIBUSB_ENDPOINT_OUT|LIBUSB_REQUEST_TYPE_CLASS|LIBUSB_RECIPIENT_INTERFACE,
-		HID_SET_REPORT, (HID_REPORT_TYPE_OUTPUT<<8)|0x00, 0, output_report, 06, 1000));
-	return 0;
-}
-
+/**
+ * send_mass_storage_command
+ */
 static int send_mass_storage_command(libusb_device_handle *handle, uint8_t endpoint, uint8_t lun,
 	uint8_t *cdb, uint8_t direction, int data_length, uint32_t *ret_tag)
 {
@@ -337,6 +198,9 @@ static int send_mass_storage_command(libusb_device_handle *handle, uint8_t endpo
 	return 0;
 }
 
+/**
+ * get_mass_storage_status
+ */
 static int get_mass_storage_status(libusb_device_handle *handle, uint8_t endpoint, uint32_t expected_tag)
 {
 	int i, r, size;
@@ -384,6 +248,9 @@ static int get_mass_storage_status(libusb_device_handle *handle, uint8_t endpoin
 	return 0;
 }
 
+/**
+ * get_sense
+ */
 static void get_sense(libusb_device_handle *handle, uint8_t endpoint_in, uint8_t endpoint_out)
 {
 	uint8_t cdb[16];	// SCSI Command Descriptor Block
@@ -413,7 +280,11 @@ static void get_sense(libusb_device_handle *handle, uint8_t endpoint_in, uint8_t
 	get_mass_storage_status(handle, endpoint_in, expected_tag);
 }
 
-// Mass Storage device to test bulk transfers (non destructive test)
+/**
+ * test_mass_storage
+ *
+ * Mass Storage device to test bulk transfers (non destructive test)
+ */
 static int test_mass_storage(libusb_device_handle *handle, uint8_t endpoint_in, uint8_t endpoint_out)
 {
 	int r, size;
@@ -425,7 +296,6 @@ static int test_mass_storage(libusb_device_handle *handle, uint8_t endpoint_in, 
 	uint8_t buffer[64];
 	char vid[9], pid[9], rev[5];
 	unsigned char *data;
-	FILE *fd;
 
 	printf("Reading Max LUN:\n");
 	r = libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN|LIBUSB_REQUEST_TYPE_CLASS|LIBUSB_RECIPIENT_INTERFACE,
@@ -500,19 +370,15 @@ static int test_mass_storage(libusb_device_handle *handle, uint8_t endpoint_in, 
 		get_sense(handle, endpoint_in, endpoint_out);
 	} else {
 		display_buffer_hex(data, size);
-		if ((binary_dump) && ((fd = fopen(binary_name, "w")) != NULL)) {
-			if (fwrite(data, 1, (size_t)size, fd) != (unsigned int)size) {
-				perr("   unable to write binary data\n");
-			}
-			fclose(fd);
-		}
 	}
 	free(data);
 
 	return 0;
 }
 
-// HID
+/**
+ * get_hid_record_size
+ */
 static int get_hid_record_size(uint8_t *hid_report_descriptor, int size, int type)
 {
 	uint8_t i, j = 0;
@@ -567,12 +433,14 @@ static int get_hid_record_size(uint8_t *hid_report_descriptor, int size, int typ
 	}
 }
 
+/**
+ * test_hid
+ */
 static int test_hid(libusb_device_handle *handle, uint8_t endpoint_in)
 {
 	int r, size, descriptor_size;
 	uint8_t hid_report_descriptor[256];
 	uint8_t *report_buffer;
-	FILE *fd;
 
 	printf("\nReading HID Report Descriptors:\n");
 	descriptor_size = libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN|LIBUSB_REQUEST_TYPE_STANDARD|LIBUSB_RECIPIENT_INTERFACE,
@@ -582,12 +450,6 @@ static int test_hid(libusb_device_handle *handle, uint8_t endpoint_in)
 		return -1;
 	}
 	display_buffer_hex(hid_report_descriptor, descriptor_size);
-	if ((binary_dump) && ((fd = fopen(binary_name, "w")) != NULL)) {
-		if (fwrite(hid_report_descriptor, 1, descriptor_size, fd) != descriptor_size) {
-			printf("   Error writing descriptor to file\n");
-		}
-		fclose(fd);
-	}
 
 	size = get_hid_record_size(hid_report_descriptor, descriptor_size, HID_REPORT_TYPE_FEATURE);
 	if (size <= 0) {
@@ -663,53 +525,9 @@ static int test_hid(libusb_device_handle *handle, uint8_t endpoint_in)
 	return 0;
 }
 
-// Read the MS WinUSB Feature Descriptors, that are used on Windows 8 for automated driver installation
-static void read_ms_winsub_feature_descriptors(libusb_device_handle *handle, uint8_t bRequest, int iface_number)
-{
-#define MAX_OS_FD_LENGTH 256
-	int i, r;
-	uint8_t os_desc[MAX_OS_FD_LENGTH];
-	uint32_t length;
-	void* le_type_punning_IS_fine;
-	struct {
-		const char* desc;
-		uint16_t index;
-		uint16_t header_size;
-	} os_fd[2] = {
-		{"Extended Compat ID", 0x0004, 0x10},
-		{"Extended Properties", 0x0005, 0x0A}
-	};
-
-	if (iface_number < 0) return;
-
-	for (i=0; i<2; i++) {
-		printf("\nReading %s OS Feature Descriptor (wIndex = 0x%04d):\n", os_fd[i].desc, os_fd[i].index);
-
-		// Read the header part
-		r = libusb_control_transfer(handle, (uint8_t)(LIBUSB_ENDPOINT_IN|LIBUSB_REQUEST_TYPE_VENDOR|LIBUSB_RECIPIENT_DEVICE),
-			bRequest, (uint16_t)(((iface_number)<< 8)|0x00), os_fd[i].index, os_desc, os_fd[i].header_size, 1000);
-		if (r < os_fd[i].header_size) {
-			perr("   Failed: %s", (r<0)?libusb_error_name((enum libusb_error)r):"header size is too small");
-			return;
-		}
-		le_type_punning_IS_fine = (void*)os_desc;
-		length = *((uint32_t*)le_type_punning_IS_fine);
-		if (length > MAX_OS_FD_LENGTH) {
-			length = MAX_OS_FD_LENGTH;
-		}
-
-		// Read the full feature descriptor
-		r = libusb_control_transfer(handle, (uint8_t)(LIBUSB_ENDPOINT_IN|LIBUSB_REQUEST_TYPE_VENDOR|LIBUSB_RECIPIENT_DEVICE),
-			bRequest, (uint16_t)(((iface_number)<< 8)|0x00), os_fd[i].index, os_desc, (uint16_t)length, 1000);
-		if (r < 0) {
-			perr("   Failed: %s", libusb_error_name((enum libusb_error)r));
-			return;
-		} else {
-			display_buffer_hex(os_desc, r);
-		}
-	}
-}
-
+/**
+ * test_device
+ */
 static int test_device(uint16_t vid, uint16_t pid)
 {
 	libusb_device_handle *handle;
@@ -719,10 +537,10 @@ static int test_device(uint16_t vid, uint16_t pid)
 	const struct libusb_endpoint_descriptor *endpoint;
 	int i, j, k, r;
 	int iface, nb_ifaces, first_iface = -1;
-#if defined(__linux__)
+
 	// Attaching/detaching the kernel driver is only relevant for Linux
 	int iface_detached = -1;
-#endif
+
 	struct libusb_device_descriptor dev_desc;
 	const char* speed_name[5] = { "Unknown", "1.5 Mbit/s (USB LowSpeed)", "12 Mbit/s (USB FullSpeed)",
 		"480 Mbit/s (USB HighSpeed)", "5000 Mbit/s (USB SuperSpeed)"};
@@ -740,21 +558,20 @@ static int test_device(uint16_t vid, uint16_t pid)
 
 	dev = libusb_get_device(handle);
 	bus = libusb_get_bus_number(dev);
-	if (extra_info) {
-		r = libusb_get_port_path(NULL, dev, port_path, sizeof(port_path));
-		if (r > 0) {
-			printf("\nDevice properties:\n");
-			printf("        bus number: %d\n", bus);
-			printf("         port path: %d", port_path[0]);
-			for (i=1; i<r; i++) {
-				printf("->%d", port_path[i]);
-			}
-			printf(" (from root hub)\n");
+
+	r = libusb_get_port_path(NULL, dev, port_path, sizeof(port_path));
+	if (r > 0) {
+		printf("\nDevice properties:\n");
+		printf("        bus number: %d\n", bus);
+		printf("         port path: %d", port_path[0]);
+		for (i=1; i<r; i++) {
+			printf("->%d", port_path[i]);
 		}
-		r = libusb_get_device_speed(dev);
-		if ((r<0) || (r>4)) r=0;
-		printf("             speed: %s\n", speed_name[r]);
+		printf(" (from root hub)\n");
 	}
+	r = libusb_get_device_speed(dev);
+	if ((r<0) || (r>4)) r=0;
+	printf("             speed: %s\n", speed_name[r]);
 
 	printf("\nReading device descriptor:\n");
 	CALL_CHECK(libusb_get_device_descriptor(dev, &dev_desc));
@@ -817,7 +634,7 @@ static int test_device(uint16_t vid, uint16_t pid)
 	{
 		printf("\nClaiming interface %d...\n", iface);
 		r = libusb_claim_interface(handle, iface);
-#if defined(__linux__)
+
 		if ((r != LIBUSB_SUCCESS) && (iface == 0)) {
 			// Maybe we need to detach the driver
 			perr("   Failed. Trying to detach driver...\n");
@@ -826,7 +643,7 @@ static int test_device(uint16_t vid, uint16_t pid)
 			printf("   Claiming interface again...\n");
 			r = libusb_claim_interface(handle, iface);
 		}
-#endif
+
 		if (r != LIBUSB_SUCCESS) {
 			perr("   Failed.\n");
 		}
@@ -846,20 +663,9 @@ static int test_device(uint16_t vid, uint16_t pid)
 		printf("   String (0x%02X): \"%s\"\n", 0xEE, string);
 		// If this is a Microsoft OS String Descriptor,
 		// attempt to read the WinUSB extended Feature Descriptors
-		if (strncmp(string, "MSFT100", 7) == 0)
-			read_ms_winsub_feature_descriptors(handle, string[7], first_iface);
 	}
 
 	switch(test_mode) {
-	case USE_PS3:
-		CALL_CHECK(display_ps3_status(handle));
-		break;
-	case USE_XBOX:
-		CALL_CHECK(display_xbox_status(handle));
-		CALL_CHECK(set_xbox_actuators(handle, 128, 222));
-		msleep(2000);
-		CALL_CHECK(set_xbox_actuators(handle, 0, 0));
-		break;
 	case USE_HID:
 		test_hid(handle, endpoint_in);
 		break;
@@ -875,12 +681,10 @@ static int test_device(uint16_t vid, uint16_t pid)
 		libusb_release_interface(handle, iface);
 	}
 
-#if defined(__linux__)
 	if (iface_detached >= 0) {
 		printf("Re-attaching kernel driver...\n");
 		libusb_attach_kernel_driver(handle, iface_detached);
 	}
-#endif
 
 	printf("Closing device...\n");
 	libusb_close(handle);
@@ -888,7 +692,10 @@ static int test_device(uint16_t vid, uint16_t pid)
 	return 0;
 }
 
-int main(int argc, char** argv)
+/**
+ * main
+ */
+int main(int argc, char *argv[])
 {
 	bool show_help = false;
 	bool debug_mode = false;
@@ -896,18 +703,11 @@ int main(int argc, char** argv)
 	int j, r;
 	size_t i, arglen;
 	unsigned tmp_vid, tmp_pid;
-	uint16_t endian_test = 0xBE00;
 
 	// Default to generic, expecting VID:PID
 	VID = 0;
 	PID = 0;
 	test_mode = USE_GENERIC;
-
-	if (((uint8_t*)&endian_test)[0] == 0xBE) {
-		printf("Despite their natural superiority for end users, big endian\n"
-			"CPUs are not supported with this program, sorry.\n");
-		return 0;
-	}
 
 	if (argc >= 2) {
 		for (j = 1; j<argc; j++) {
@@ -917,50 +717,6 @@ int main(int argc, char** argv)
 				switch(argv[j][1]) {
 				case 'd':
 					debug_mode = true;
-					break;
-				case 'i':
-					extra_info = true;
-					break;
-				case 'b':
-					if ((j+1 >= argc) || (argv[j+1][0] == '-') || (argv[j+1][0] == '/')) {
-						printf("   Option -b requires a file name");
-						return 1;
-					}
-					binary_name = argv[++j];
-					binary_dump = true;
-					break;
-				case 'j':
-					// OLIMEX ARM-USB-TINY JTAG, 2 channel composite device - 2 interfaces
-					if (!VID && !PID) {
-						VID = 0x15BA;
-						PID = 0x0004;
-					}
-					break;
-				case 'k':
-					// Generic 2 GB USB Key (SCSI Transparent/Bulk Only) - 1 interface
-					if (!VID && !PID) {
-						VID = 0x0204;
-						PID = 0x6025;
-					}
-					break;
-				// The following tests will force VID:PID if already provided
-				case 'p':
-					// Sony PS3 Controller - 1 interface
-					VID = 0x054C;
-					PID = 0x0268;
-					test_mode = USE_PS3;
-					break;
-				case 's':
-					// Microsoft Sidewinder Precision Pro Joystick - 1 HID interface
-					VID = 0x045E;
-					PID = 0x0008;
-					test_mode = USE_HID;
-					break;
-				case 'x':
-					// Microsoft XBox Controller Type S - 1 interface
-					VID = 0x045E;
-					PID = 0x0289;
-					test_mode = USE_XBOX;
 					break;
 				default:
 					show_help = true;
@@ -972,7 +728,7 @@ int main(int argc, char** argv)
 						break;
 				}
 				if (i != arglen) {
-					if (sscanf_s(argv[j], "%x:%x" , &tmp_vid, &tmp_pid) != 2) {
+					if (sscanf(argv[j], "%x:%x" , &tmp_vid, &tmp_pid) != 2) {
 						printf("   Please specify VID & PID as \"vid:pid\" in hexadecimal format\n");
 						return 1;
 					}
@@ -990,12 +746,7 @@ int main(int argc, char** argv)
 		printf("   -h      : display usage\n");
 		printf("   -d      : enable debug output\n");
 		printf("   -i      : print topology and speed info\n");
-		printf("   -j      : test composite FTDI based JTAG device\n");
-		printf("   -k      : test Mass Storage device\n");
 		printf("   -b file : dump Mass Storage data to file 'file'\n");
-		printf("   -p      : test Sony PS3 SixAxis controller\n");
-		printf("   -s      : test Microsoft Sidewinder Precision Pro (HID)\n");
-		printf("   -x      : test Microsoft XBox Controller Type S\n");
 		printf("If only the vid:pid is provided, xusb attempts to run the most appropriate test\n");
 		return 0;
 	}
@@ -1014,3 +765,4 @@ int main(int argc, char** argv)
 
 	return 0;
 }
+
