@@ -1,8 +1,8 @@
-#include <stdio.h>
+#include <stdarg.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdarg.h>
 #include <unistd.h>
 #include <libusb.h>
 
@@ -101,14 +101,11 @@ static uint8_t cdb_length[256] = {
 };
 
 
-uint16_t VID, PID;
-
 /**
  * display_buffer_hex
  */
 static void display_buffer_hex (unsigned char *buffer, unsigned size)
 {
-	fprintf (stderr, "\e[32m%s\e[0m\n", __FUNCTION__);
 	unsigned i, j, k;
 
 	for (i=0; i<size; i+=16) {
@@ -141,7 +138,6 @@ static void display_buffer_hex (unsigned char *buffer, unsigned size)
 static int send_mass_storage_command (libusb_device_handle *handle, uint8_t endpoint, uint8_t lun,
 	uint8_t *cdb, uint8_t direction, int data_length, uint32_t *ret_tag)
 {
-	fprintf (stderr, "\e[32m%s\e[0m\n", __FUNCTION__);
 	static uint32_t tag = 1;
 	uint8_t cdb_len;
 	int i, r, size;
@@ -200,7 +196,6 @@ static int send_mass_storage_command (libusb_device_handle *handle, uint8_t endp
  */
 static int get_mass_storage_status (libusb_device_handle *handle, uint8_t endpoint, uint32_t expected_tag)
 {
-	fprintf (stderr, "\e[32m%s\e[0m\n", __FUNCTION__);
 	int i, r, size;
 	struct command_status_wrapper csw;
 
@@ -251,7 +246,6 @@ static int get_mass_storage_status (libusb_device_handle *handle, uint8_t endpoi
  */
 static void get_sense (libusb_device_handle *handle, uint8_t endpoint_in, uint8_t endpoint_out)
 {
-	fprintf (stderr, "\e[32m%s\e[0m\n", __FUNCTION__);
 	uint8_t cdb[16];	// SCSI Command Descriptor Block
 	uint8_t sense[18];
 	uint32_t expected_tag;
@@ -286,7 +280,6 @@ static void get_sense (libusb_device_handle *handle, uint8_t endpoint_in, uint8_
  */
 static int test_mass_storage (libusb_device_handle *handle, uint8_t endpoint_in, uint8_t endpoint_out)
 {
-	fprintf (stderr, "\e[32m%s\e[0m\n", __FUNCTION__);
 	int r, size;
 	uint8_t lun;
 	uint32_t expected_tag;
@@ -381,7 +374,6 @@ static int test_mass_storage (libusb_device_handle *handle, uint8_t endpoint_in,
  */
 static int test_device (uint16_t vid, uint16_t pid)
 {
-	fprintf (stderr, "\e[32m%s\e[0m\n", __FUNCTION__);
 	libusb_device_handle *handle;
 	libusb_device *dev;
 	uint8_t bus, port_path[8];
@@ -520,7 +512,8 @@ static int test_device (uint16_t vid, uint16_t pid)
 		// attempt to read the WinUSB extended Feature Descriptors
 	}
 
-	//CALL_CHECK (test_mass_storage (handle, endpoint_in, endpoint_out));
+	if (0)
+		CALL_CHECK (test_mass_storage (handle, endpoint_in, endpoint_out));
 
 	printf ("\n");
 	for (iface = 0; iface<num_ifaces; iface++) {
@@ -544,13 +537,13 @@ static int test_device (uint16_t vid, uint16_t pid)
  */
 int main (int argc, char *argv[])
 {
-	fprintf (stderr, "\e[32m%s\e[0m\n", __FUNCTION__);
 	bool show_help = false;
 	bool debug_mode = false;
 	const struct libusb_version *version;
 	int j, r;
 	size_t i, arglen;
 	unsigned tmp_vid, tmp_pid;
+	uint16_t VID, PID;
 
 	// Default to generic, expecting VID:PID
 	VID = 0;
