@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <string.h>
 
 typedef unsigned char      u8;
 typedef unsigned short     u16;
@@ -126,38 +127,39 @@ static void dump_usb (u8 *data)
 		default:   status = "Unknown";                                         break;
 	}
 
-	printf ("\e[32mUSB Block\e[0m\n");
+	//printf ("\e[32mUSB Block\e[0m\n");
 
-	dump_hex (data, 0, 40);
-	printf ("\n");
+	//dump_hex (data, 0, 40);
+	//printf ("\n");
 
-	printf ("\tURB ID: 0x%llx\n", u->id);
-	printf ("\tURB Type: %s\n", type);
-	printf ("\tURB transfer type: %s\n", xfer);
-	printf ("\tEndpoint: 0x%02x\n", u->epnum);
-	printf ("\t\tDirection: %s\n", (u->epnum & 0x80) ? "IN" : "OUT");
-	printf ("\t\tEndpoint: %d\n", (u->epnum & 0x7f));
-	printf ("\tDevice: %d\n", u->devnum);
-	printf ("\tURB bus id: %d\n", u->busnum);
-	printf ("\tDevice setup request: %s\n", setup);
-	printf ("\tData: %s\n", present);
-	printf ("\tURB sec: %lld\n", u->ts_sec);
-	printf ("\tURB usec: %d\n", u->ts_usec);
-	printf ("\tURB status: %s\n", status);
-	printf ("\tURB length: %d\n", u->length);
-	printf ("\tData length: %d\n", u->len_cap);
+	printf ("URB ID: 0x%llx\n", u->id);
+	printf ("URB Type: %s\n", type);
+	printf ("URB transfer type: %s\n", xfer);
+	printf ("Endpoint: 0x%02x\n", u->epnum);
+	printf ("\tDirection: %s\n", (u->epnum & 0x80) ? "IN" : "OUT");
+	printf ("\tEndpoint: %d\n", (u->epnum & 0x7f));
+	printf ("Device: %d\n", u->devnum);
+	printf ("URB bus id: %d\n", u->busnum);
+	printf ("Device setup request: %s\n", setup);
+	printf ("Data: %s\n", present);
+	printf ("URB sec: %lld\n", u->ts_sec);
+	printf ("URB usec: %d\n", u->ts_usec);
+	printf ("URB status: %s\n", status);
+	printf ("URB length: %d\n", u->length);
+	printf ("Data length: %d\n", u->len_cap);
 	//printf ("\txfer_flags: %d\n", u->xfer_flags);
 
-	if ((u->xfer_type == 2) && (u->flag_data == 0)) {
+	//if (0 && (u->xfer_type == 2) && (u->flag_data == 0)) {
+	if ((u->setup[0]) || (u->setup[1]) || (u->setup[2]) || (u->setup[3]) || (u->setup[4]) || (u->setup[5]) || (u->setup[6]) || (u->setup[7])) {
 		u16 *lang = (u16 *)(u->setup+4);
 		u16 *len  = (u16 *)(u->setup+6);
-		printf ("\tURB setup:\n");
-		printf ("\t\tbmRequestType: 0x%02x\n", u->setup[0]);
-		printf ("\t\tbRequest: %d\n",          u->setup[1]);
-		printf ("\t\tDescriptor index: %d\n",  u->setup[2]);
-		printf ("\t\tbDescriptor type: %d\n",  u->setup[3]);
-		printf ("\t\tLanguage Id: 0x%04x\n",  *lang);
-		printf ("\t\twLength: %d\n",          *len);
+		printf ("URB setup:\n");
+		printf ("\tbmRequestType: 0x%02x\n", u->setup[0]);
+		printf ("\tbRequest: %d\n",          u->setup[1]);
+		printf ("\tDescriptor index: %d\n",  u->setup[2]);
+		printf ("\tbDescriptor type: %d\n",  u->setup[3]);
+		printf ("\tLanguage Id: 0x%04x\n",  *lang);
+		printf ("\twLength: %d\n",          *len);
 	}
 }
 
@@ -200,6 +202,7 @@ int main (int argc, char *argv[])
 	//if (f == NULL) { exit (1); }
 
 	while (!feof (f)) {
+		memset (buffer, 'R', sizeof (buffer));
 		count = fread (&usb, 1, 48, f);
 		//printf ("header %d bytes\n", count);
 		if (count < 48) {
@@ -223,36 +226,36 @@ int main (int argc, char *argv[])
 		}
 
 		if ((usb.epnum == 0x80) && (buffer[0] == 18) && 0) {
-			printf ("\tDEVICE DESCRIPTOR\n");
-			printf ("\t\tbLength: %d\n",             buffer[0]);
-			printf ("\t\tbDescriptorType: %d\n",     buffer[1]);
-			printf ("\t\tbcdUSB: %d\n",    *(u16 *) (buffer+2));
-			printf ("\t\tbDeviceClass: %d\n",        buffer[4]);
-			printf ("\t\tbDeviceSubClass: %d\n",     buffer[5]);
-			printf ("\t\tbDeviceProtocol: %d\n",     buffer[6]);
-			printf ("\t\tbMaxPacketSize0: %d\n",     buffer[7]);
-			printf ("\t\tidVendor: %d\n",  *(u16 *) (buffer+8));
-			printf ("\t\tidProduct: %d\n", *(u16 *) (buffer+10));
-			printf ("\t\tbcdDevice: %d\n", *(u16 *) (buffer+12));
-			printf ("\t\tiManufacturer: %d\n",       buffer[14]);
-			printf ("\t\tiProduct: %d\n",            buffer[15]);
-			printf ("\t\tiSerialNumber: %d\n",       buffer[16]);
-			printf ("\t\tbNumConfigurations: %d\n",  buffer[17]);
+			printf ("DEVICE DESCRIPTOR\n");
+			printf ("\tbLength: %d\n",             buffer[0]);
+			printf ("\tbDescriptorType: %d\n",     buffer[1]);
+			printf ("\tbcdUSB: 0x%04x\n",*(u16 *) (buffer+2));
+			printf ("\tbDeviceClass: %d\n",        buffer[4]);
+			printf ("\tbDeviceSubClass: %d\n",     buffer[5]);
+			printf ("\tbDeviceProtocol: %d\n",     buffer[6]);
+			printf ("\tbMaxPacketSize0: %d\n",     buffer[7]);
+			printf ("\tidVendor: %d\n",  *(u16 *) (buffer+8));
+			printf ("\tidProduct: %d\n", *(u16 *) (buffer+10));
+			printf ("\tbcdDevice: %d\n", *(u16 *) (buffer+12));
+			printf ("\tiManufacturer: %d\n",       buffer[14]);
+			printf ("\tiProduct: %d\n",            buffer[15]);
+			printf ("\tiSerialNumber: %d\n",       buffer[16]);
+			printf ("\tbNumConfigurations: %d\n",  buffer[17]);
 		}
 
-		printf ("\n");
+		//printf ("\n");
 		records++;
 		if (records == 2)
 			break;
 	}
 
-	count = fread (buffer, 1, 128, f);
-	printf ("\n");
-	dump_hex (buffer, 0, 128);
-	printf ("\n");
+	//count = fread (buffer, 1, 128, f);
+	//printf ("\n");
+	//dump_hex (buffer, 0, 128);
+	//printf ("\n");
 
 	fclose (f);
-	printf ("EOF\n");
+	//printf ("EOF\n");
 	return 0;
 }
 
