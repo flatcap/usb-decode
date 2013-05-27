@@ -162,8 +162,36 @@ static void dump_usb (u8 *data)
 	if ((u->xfer_type == 2) && (u->type == 'S') && (u->flag_setup == 0)) {
 		u16 *lang = (u16 *)(u->setup+4);
 		u16 *len  = (u16 *)(u->setup+6);
+		char *rt_direction;
+		char *rt_type;
+		char *rt_recipient;
+
+		switch (u->setup[0] >> 7) {
+			case 0:    rt_direction = "Host to Device"; break;
+			case 1:    rt_direction = "Device to Host"; break;
+			default:   rt_direction = "Unknown";        break;
+		}
+
+		switch ((u->setup[0] >> 5) & 0x03) {
+			case 0:    rt_type = "Standard"; break;
+			case 1:    rt_type = "Class";    break;
+			case 2:    rt_type = "Vendor";   break;
+			default:   rt_type = "Reserved"; break;
+		}
+
+		switch (u->setup[0] & 0x1f) {
+			case 0:    rt_recipient = "Device";    break;
+			case 1:    rt_recipient = "Interface"; break;
+			case 2:    rt_recipient = "Endpoint";  break;
+			case 3:    rt_recipient = "Other";     break;
+			default:   rt_recipient = "Reserved";  break;
+		}
+
 		printf ("URB setup:\n");
 		printf ("	bmRequestType: 0x%02x\n", u->setup[0]);
+		printf ("		Transfer direction: %s\n", rt_direction);
+		printf ("		Type: %s\n", rt_type);
+		printf ("		Recipient: %s\n", rt_recipient);
 		printf ("	bRequest: %d\n",          u->setup[1]);
 		printf ("	Descriptor index: %d\n",  u->setup[2]);
 		printf ("	bDescriptor type: %d\n",  u->setup[3]);
