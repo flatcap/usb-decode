@@ -200,21 +200,12 @@ int main(int argc __unused, char **argv)
 	struct usbmon_get_arg getb;
 	enum { MFETCH_NM = 3 };
 	unsigned int offs[MFETCH_NM];
-	unsigned int off;
+	int off;
 	struct usbmon_mfetch_arg mfb;
 	unsigned char *data_buff;
 	unsigned int toflush;
-	int i;
+	unsigned int i;
 	int rc;
-
-	if (sizeof(struct usbmon_packet) != 48) {
-		extern void usbmon_packet_size_is_bolixed(void);
-		usbmon_packet_size_is_bolixed();	/* link-time error */
-	}
-	if (sizeof(struct usbmon_packet_1) != 64) {
-		extern void usbmon_packet_1_size_is_bolixed(void);
-		usbmon_packet_1_size_is_bolixed();	/* link-time error */
-	}
 
 	parse_params(&par, argv+1);
 
@@ -522,7 +513,7 @@ void print_1u(const struct params *prm, const struct usbmon_packet_1 *ep,
 			ndesc = ep->ndesc;
 			if (ndesc > ISODESC_MAX)
 				ndesc = ISODESC_MAX;
-			if (ndesc * sizeof(struct usbmon_isodesc) > data_len) {
+			if (ndesc * (int) sizeof(struct usbmon_isodesc) > data_len) {
 				ndesc = data_len / sizeof(struct usbmon_isodesc);
 			}
 			/* This is aligned by malloc */
@@ -539,7 +530,7 @@ void print_1u(const struct params *prm, const struct usbmon_packet_1 *ep,
 			 * find where the data starts.
 			 */
 			ndesc = ep->ndesc;
-			if (ndesc * sizeof(struct usbmon_isodesc) > data_len) {
+			if (ndesc * (int) sizeof(struct usbmon_isodesc) > data_len) {
 				data_len = 0;
 			} else {
 				data += ndesc * sizeof(struct usbmon_isodesc);
@@ -669,7 +660,7 @@ void print_human(const struct params *prm, const struct usbmon_packet_1 *ep,
 			ndesc = ep->ndesc;
 			if (ndesc > ISODESC_MAX)
 				ndesc = ISODESC_MAX;
-			if (ndesc * sizeof(struct usbmon_isodesc) > data_len) {
+			if (ndesc * (int) sizeof(struct usbmon_isodesc) > data_len) {
 				ndesc = data_len / sizeof(struct usbmon_isodesc);
 			}
 			/* This is aligned by malloc */
@@ -686,7 +677,7 @@ void print_human(const struct params *prm, const struct usbmon_packet_1 *ep,
 			 * find where the data starts.
 			 */
 			ndesc = ep->ndesc;
-			if (ndesc * sizeof(struct usbmon_isodesc) > data_len) {
+			if (ndesc * (int) sizeof(struct usbmon_isodesc) > data_len) {
 				data_len = 0;
 			} else {
 				data += ndesc * sizeof(struct usbmon_isodesc);
