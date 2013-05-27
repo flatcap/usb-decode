@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
+#include <stdint.h>
+
+#include "usb.h"
 
 typedef unsigned char      u8;
 typedef unsigned short     u16;
@@ -54,9 +57,9 @@ static void dump_hex (void *buf, int start, int length)
 
 	for (off = s; off < e; off += 16) {
 		if (off == s)
-			printf("\t%6.6x ", start);
+			printf("	%6.6x ", start);
 		else
-			printf("\t%6.6x ", off);
+			printf("	%6.6x ", off);
 
 		for (i = 0; i < 16; i++) {
 			if (i == 8)
@@ -136,8 +139,8 @@ static void dump_usb (u8 *data)
 	printf ("URB Type: %s\n", type);
 	printf ("URB transfer type: %s\n", xfer);
 	printf ("Endpoint: 0x%02x\n", u->epnum);
-	printf ("\tDirection: %s\n", (u->epnum & 0x80) ? "IN" : "OUT");
-	printf ("\tEndpoint: %d\n", (u->epnum & 0x7f));
+	printf ("	Direction: %s\n", (u->epnum & 0x80) ? "IN" : "OUT");
+	printf ("	Endpoint: %d\n", (u->epnum & 0x7f));
 	printf ("Device: %d\n", u->devnum);
 	printf ("URB bus id: %d\n", u->busnum);
 	printf ("Device setup request: %s\n", setup);
@@ -147,19 +150,19 @@ static void dump_usb (u8 *data)
 	printf ("URB status: %s\n", status);
 	printf ("URB length: %d\n", u->length);
 	printf ("Data length: %d\n", u->len_cap);
-	//printf ("\txfer_flags: %d\n", u->xfer_flags);
+	//printf ("	xfer_flags: %d\n", u->xfer_flags);
 
 	//if (0 && (u->xfer_type == 2) && (u->flag_data == 0)) {
 	if ((u->setup[0]) || (u->setup[1]) || (u->setup[2]) || (u->setup[3]) || (u->setup[4]) || (u->setup[5]) || (u->setup[6]) || (u->setup[7])) {
 		u16 *lang = (u16 *)(u->setup+4);
 		u16 *len  = (u16 *)(u->setup+6);
 		printf ("URB setup:\n");
-		printf ("\tbmRequestType: 0x%02x\n", u->setup[0]);
-		printf ("\tbRequest: %d\n",          u->setup[1]);
-		printf ("\tDescriptor index: %d\n",  u->setup[2]);
-		printf ("\tbDescriptor type: %d\n",  u->setup[3]);
-		printf ("\tLanguage Id: 0x%04x\n",  *lang);
-		printf ("\twLength: %d\n",          *len);
+		printf ("	bmRequestType: 0x%02x\n", u->setup[0]);
+		printf ("	bRequest: %d\n",          u->setup[1]);
+		printf ("	Descriptor index: %d\n",  u->setup[2]);
+		printf ("	bDescriptor type: %d\n",  u->setup[3]);
+		printf ("	Language Id: 0x%04x\n",  *lang);
+		printf ("	wLength: %d\n",          *len);
 	}
 }
 
@@ -221,32 +224,89 @@ int main (int argc, char *argv[])
 		if (usb.len_cap) {
 			count = fread (buffer, 1, usb.len_cap, f);
 			//printf ("read %d bytes\n", count);
-			dump_hex (buffer, 0, usb.len_cap);
+			if ((usb.len_cap == 13) && (buffer[0] == 'U') && (buffer[1] == 'S') && (buffer[2] == 'B') && (buffer[3] == 'S')) {
+				printf ("	Command Status Wrapper (CSW), 13 bytes\n");
+				printf ("		dCSWSignature: %.4s\n",              buffer+0);
+				printf ("		dCSWTag: 0x%04x\n",         *(u32 *)(buffer+4));
+				printf ("		dCSWDataResidue: 0x%04x\n", *(u32 *)(buffer+8));
+				printf ("		dCSWStatus: %d\n",                   buffer[12]);
+				// status
+				//	0	ok
+				//	1	failed -> send "GetSense" immediately
+				//	2	phase error
+			} else if ((usb.len_cap == 31) && (buffer[0] == 'U') && (buffer[1] == 'S') && (buffer[2] == 'B') && (buffer[3] == 'C')) {
+				printf ("Command Block Wrapper (CBW), 31 bytes\n");
+				printf ("	dCSWSignature: %.4s\n",                     buffer+0);
+				printf ("	dCSWTag: 0x%04x\n",                *(u32 *)(buffer+4));
+				printf ("	dCBWDataTransferLength: 0x%04x\n", *(u32 *)(buffer+8));
+				printf ("	bmCBWFlags: %d\n",                          buffer[12]);
+				// flags
+				//	0x00	direction 1
+				//	0x80	direction 2
+				// not sure which is inbound and which outbound
+				printf ("	bCBWLUN: %d\n",                             buffer[13]);
+				printf ("	bCBWCBLength: %d\n",                        buffer[14]);
+				printf ("	CBWCB:\n");
+				if (buffer[14] == 6) {
+					printf ("		Operation code: %d\n", buffer[15]);
+					printf ("		LUN: %d\n", buffer[16]>>5);
+					printf ("		Reserved 1: %d\n", buffer[16] & 0x1F);
+					printf ("		Reserved 2: %d\n", buffer[17]);
+					printf ("		Reserved 3: %d\n", buffer[18]);
+					printf ("		Allocation length: %d\n", buffer[19]);
+					printf ("		Control: %d\n", buffer[20]);
+				} else {
+					dump_hex (buffer+15, 0, 16);
+				}
+			} else if (buffer[0] == 0x70) {
+				printf ("	Request Sense Response\n");
+				printf ("		Valid: %d\n", buffer[0] >> 7);
+				printf ("		Response Code: %d\n", buffer[0] & 0x7f);
+				printf ("		Obsolete: %d\n", buffer[1]);
+				printf ("		Filemark: %d\n", (buffer[2] & 0x80) >> 7);
+				printf ("		EOM: %d\n", (buffer[2] & 0x40) >> 6);
+				printf ("		ILI: %d\n", (buffer[2] & 0x20) >> 5);
+				printf ("		Reserved: %d\n", (buffer[2] & 0x10) >> 4);
+				printf ("		Sense Key: %d\n", buffer[2] & 0x0F);
+				// Information dependent on (buffer[0] >> 7)
+				printf ("		Information: %02x %02x %02x %02x\n", buffer[3], buffer[4], buffer[5], buffer[6]);
+				printf ("		Additional sense length: %d\n", buffer[7]);
+				printf ("		Command-specific information: %02x %02x %02x %02x\n", buffer[8], buffer[9], buffer[10], buffer[11]);
+				printf ("		Additional sense code: 0x%02x\n", buffer[12]);
+				printf ("		Additional sense code qualifier: %d\n", buffer[13]);
+				printf ("		Field replaceable unit code qualifier: %d\n", buffer[14]);
+				printf ("		SKSV: %d\n", buffer[15] >> 7);
+				printf ("		Sense key specfic 1: %d\n", buffer[15] & 0x7F);
+				printf ("		Sense key specfic 2: %d\n", buffer[16]);
+				printf ("		Sense key specfic 3: %d\n", buffer[17]);
+			} else {
+				dump_hex (buffer, 0, usb.len_cap);
+			}
 			printf ("\n");
 		}
 
-		if ((usb.epnum == 0x80) && (buffer[0] == 18) && 0) {
+		if ((usb.epnum == 0x80) && (usb.len_cap == 18) && (buffer[1] == 1) && (buffer[0] == 18)) {
+			usb_device_descriptor *dd = (usb_device_descriptor*) buffer;
 			printf ("DEVICE DESCRIPTOR\n");
-			printf ("\tbLength: %d\n",             buffer[0]);
-			printf ("\tbDescriptorType: %d\n",     buffer[1]);
-			printf ("\tbcdUSB: 0x%04x\n",*(u16 *) (buffer+2));
-			printf ("\tbDeviceClass: %d\n",        buffer[4]);
-			printf ("\tbDeviceSubClass: %d\n",     buffer[5]);
-			printf ("\tbDeviceProtocol: %d\n",     buffer[6]);
-			printf ("\tbMaxPacketSize0: %d\n",     buffer[7]);
-			printf ("\tidVendor: %d\n",  *(u16 *) (buffer+8));
-			printf ("\tidProduct: %d\n", *(u16 *) (buffer+10));
-			printf ("\tbcdDevice: %d\n", *(u16 *) (buffer+12));
-			printf ("\tiManufacturer: %d\n",       buffer[14]);
-			printf ("\tiProduct: %d\n",            buffer[15]);
-			printf ("\tiSerialNumber: %d\n",       buffer[16]);
-			printf ("\tbNumConfigurations: %d\n",  buffer[17]);
+			printf ("	bLength            : %d\n",     dd->bLength);
+			printf ("	bDescriptorType    : %d\n",     dd->bDescriptorType);
+			printf ("	bcdUSB             : 0x%04x\n", dd->bcdUSB);
+			printf ("	bDeviceClass       : %d\n",     dd->bDeviceClass);
+			printf ("	bDeviceSubClass    : %d\n",     dd->bDeviceSubclass);
+			printf ("	bDeviceProtocol    : %d\n",     dd->bDeviceProtocol);
+			printf ("	bMaxPacketSize0    : %d\n",     dd->bMaxPacketSize0);
+			printf ("	idVendor           : %d\n",     dd->idVendor);
+			printf ("	idProduct          : %d\n",     dd->idProduct);
+			printf ("	bcdDevice          : %d\n",     dd->bcdDevice);
+			printf ("	iManufacturer      : %d\n",     dd->iManufacturer);
+			printf ("	iProduct           : %d\n",     dd->iProduct);
+			printf ("	iSerialNumber      : %d\n",     dd->iSerialNumber);
+			printf ("	bNumConfigurations : %d\n",     dd->bNumConfigurations);
 		}
 
 		//printf ("\n");
 		records++;
-		if (records == 2)
-			break;
+		//if (records == 2) break;
 	}
 
 	//count = fread (buffer, 1, 128, f);
