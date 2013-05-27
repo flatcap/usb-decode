@@ -339,7 +339,7 @@ static int test_mass_storage (libusb_device_handle *handle, uint8_t endpoint_in,
 		perr ("	unable to allocate data buffer\n");
 		return -1;
 	}
-	memset (data, 'R', (max_lba+1)*block_size);
+	//memset (data, 'R', block_size);
 
 	// Send Read
 	printf ("Attempting to read %d bytes:\n", block_size);
