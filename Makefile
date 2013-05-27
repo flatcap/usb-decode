@@ -1,5 +1,7 @@
 CC	= gcc
 
+PROGS	= dump usbmon mmap usb usb_list xusb bulk
+
 PACKAGES = libusb-1.0
 
 #CFLAGS += -Wall -Wp,-D_FORTIFY_SOURCE=2 -O2
@@ -13,11 +15,11 @@ CFLAGS += -g
 CFLAGS	+= $(shell pkg-config --cflags $(PACKAGES))
 LDFLAGS += $(shell pkg-config --libs   $(PACKAGES))
 
-all: jim usbmon mmap usb usb_list xusb bulk
+all: $(PROGS)
 
 .c.o:
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f *.o usbmon jim mmap
+	rm -f $(PROGS)
 
