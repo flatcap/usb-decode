@@ -129,9 +129,10 @@ static void dump_usb (u8 *data)
 	}
 
 	switch (u->status) {
-		case 0:    status = "Success (0)";                                     break;
-		case -115: status = "Operation now in progress (-EINPROGRESS) (-115)"; break;
-		default:   status = "Unknown";                                         break;
+		case    0: status = "Success";                                  break;
+		case  -32: status = "Broken pipe (-EPIPE)";                     break;
+		case -115: status = "Operation now in progress (-EINPROGRESS)"; break;
+		default:   status = "Unknown";                                  break;
 	}
 
 	//printf ("\e[32mUSB Block\e[0m\n");
@@ -151,7 +152,7 @@ static void dump_usb (u8 *data)
 	printf ("Data: %s\n", present);
 	printf ("URB sec: %lld\n", u->ts_sec);
 	printf ("URB usec: %d\n", u->ts_usec);
-	printf ("URB status: %s\n", status);
+	printf ("URB status: %s (%d)\n", status, u->status);
 	printf ("URB length: %d\n", u->length);
 	printf ("Data length: %d\n", u->len_cap);
 	//printf ("	xfer_flags: %d\n", u->xfer_flags);
@@ -308,20 +309,40 @@ int main (int argc, char *argv[])
 				//	1	failed -> send "GetSense" immediately
 				//	2	phase error
 			} else if ((usb.len_cap == 31) && (buffer[0] == 'U') && (buffer[1] == 'S') && (buffer[2] == 'B') && (buffer[3] == 'C')) {
+				char *op;
+				char *direction;
+
+				switch (buffer[15]) {
+					case 0x00: op = "TEST UNIT READY";              break;
+					case 0x03: op = "REQUEST SENSE";                break;
+					case 0x12: op = "INQUIRY";                      break;
+					case 0x1A: op = "MODE SENSE (6)";               break;
+					case 0x1E: op = "PREVENT ALLOW MEDIUM REMOVAL"; break;
+					case 0x23: op = "READ FORMAT CAPACITIES";       break;
+					case 0x25: op = "READ CAPACITY(10)";            break;
+					case 0x28: op = "READ(10)";                     break;
+					case 0xDA: op = "VENDOR";                       break;
+					case 0xDB: op = "VENDOR";                       break;
+					default:   op = "UNKNOWN";
+				}
+
+				switch (buffer[12]) {
+					case 0x00: direction = "host to device"; break;
+					case 0x80: direction = "device to host"; break;
+					default:   direction = "UNKNOWN";
+				}
+
 				printf ("Command Block Wrapper (CBW), 31 bytes\n");
 				printf ("	dCSWSignature: %.4s\n",                     buffer+0);
 				printf ("	dCSWTag: 0x%04x\n",                *(u32 *)(buffer+4));
 				printf ("	dCBWDataTransferLength: 0x%04x\n", *(u32 *)(buffer+8));
-				printf ("	bmCBWFlags: %d\n",                          buffer[12]);
-				// flags
-				//	0x00	direction 1
-				//	0x80	direction 2
-				// not sure which is inbound and which outbound
+				printf ("	bmCBWFlags: 0x%02x %s\n",                   buffer[12], direction);
 				printf ("	bCBWLUN: %d\n",                             buffer[13]);
 				printf ("	bCBWCBLength: %d\n",                        buffer[14]);
 				printf ("	CBWCB:\n");
-				if (buffer[14] == 6) {
-					printf ("		Operation code: %d\n", buffer[15]);
+
+				printf ("		Operation code: 0x%02x %s\n", buffer[15], op);
+				if (buffer[15] < 0xC0) {
 					printf ("		LUN: %d\n", buffer[16]>>5);
 					printf ("		Reserved 1: %d\n", buffer[16] & 0x1F);
 					printf ("		Reserved 2: %d\n", buffer[17]);
