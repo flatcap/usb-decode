@@ -156,8 +156,10 @@ static void dump_usb (u8 *data)
 	printf ("Data length: %d\n", u->len_cap);
 	//printf ("	xfer_flags: %d\n", u->xfer_flags);
 
-	//if (0 && (u->xfer_type == 2) && (u->flag_data == 0)) {
-	if ((u->setup[0]) || (u->setup[1]) || (u->setup[2]) || (u->setup[3]) || (u->setup[4]) || (u->setup[5]) || (u->setup[6]) || (u->setup[7])) {
+	// Transfer Type: Control (2)
+	// Type: Submit ('S')
+	// Setup: Relevant (0)
+	if ((u->xfer_type == 2) && (u->type == 'S') && (u->flag_setup == 0)) {
 		u16 *lang = (u16 *)(u->setup+4);
 		u16 *len  = (u16 *)(u->setup+6);
 		printf ("URB setup:\n");
