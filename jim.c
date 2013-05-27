@@ -6,6 +6,10 @@
 
 #include "usb.h"
 
+typedef unsigned char      bool;
+const bool true  = 1;
+const bool false = 0;
+
 typedef unsigned char      u8;
 typedef unsigned short     u16;
 typedef unsigned int       u32;
@@ -167,6 +171,45 @@ static void dump_usb (u8 *data)
 }
 
 
+/**
+ * display_usb_device_descriptor
+ */
+static bool display_usb_device_descriptor (struct usbmon_packet *usb, u8 *data)
+{
+	if (usb->epnum != 0x80)		// Inbound traffic
+		return false;
+
+	if (usb->len_cap != 18)		// Data length
+		return false;
+
+	if (data[0] != 18)		// Descriptor length
+		return false;
+
+	if (data[1] != 1)		// Descriptor type
+		return false;
+
+	usb_device_descriptor *dd = (usb_device_descriptor*) data;
+
+	printf ("Device Descriptor\n");
+	printf ("	bLength            : %d\n",     dd->bLength);
+	printf ("	bDescriptorType    : %d\n",     dd->bDescriptorType);
+	printf ("	bcdUSB             : 0x%04x\n", dd->bcdUSB);
+	printf ("	bDeviceClass       : %d\n",     dd->bDeviceClass);
+	printf ("	bDeviceSubClass    : %d\n",     dd->bDeviceSubclass);
+	printf ("	bDeviceProtocol    : %d\n",     dd->bDeviceProtocol);
+	printf ("	bMaxPacketSize0    : %d\n",     dd->bMaxPacketSize0);
+	printf ("	idVendor           : 0x%04x\n", dd->idVendor);
+	printf ("	idProduct          : 0x%04x\n", dd->idProduct);
+	printf ("	bcdDevice          : %d\n",     dd->bcdDevice);
+	printf ("	iManufacturer      : %d\n",     dd->iManufacturer);
+	printf ("	iProduct           : %d\n",     dd->iProduct);
+	printf ("	iSerialNumber      : %d\n",     dd->iSerialNumber);
+	printf ("	bNumConfigurations : %d\n",     dd->bNumConfigurations);
+
+	return true;
+}
+
+
 #if 0
 /**
  * file_append
@@ -259,49 +302,32 @@ int main (int argc, char *argv[])
 					dump_hex (buffer+15, 0, 16);
 				}
 			} else if (buffer[0] == 0x70) {
-				printf ("	Request Sense Response\n");
-				printf ("		Valid: %d\n", buffer[0] >> 7);
-				printf ("		Response Code: %d\n", buffer[0] & 0x7f);
-				printf ("		Obsolete: %d\n", buffer[1]);
-				printf ("		Filemark: %d\n", (buffer[2] & 0x80) >> 7);
-				printf ("		EOM: %d\n", (buffer[2] & 0x40) >> 6);
-				printf ("		ILI: %d\n", (buffer[2] & 0x20) >> 5);
-				printf ("		Reserved: %d\n", (buffer[2] & 0x10) >> 4);
-				printf ("		Sense Key: %d\n", buffer[2] & 0x0F);
+				printf ("Request Sense Response\n");
+				printf ("	Valid: %d\n", buffer[0] >> 7);
+				printf ("	Response Code: %d\n", buffer[0] & 0x7f);
+				printf ("	Obsolete: %d\n", buffer[1]);
+				printf ("	Filemark: %d\n", (buffer[2] & 0x80) >> 7);
+				printf ("	EOM: %d\n", (buffer[2] & 0x40) >> 6);
+				printf ("	ILI: %d\n", (buffer[2] & 0x20) >> 5);
+				printf ("	Reserved: %d\n", (buffer[2] & 0x10) >> 4);
+				printf ("	Sense Key: %d\n", buffer[2] & 0x0F);
 				// Information dependent on (buffer[0] >> 7)
-				printf ("		Information: %02x %02x %02x %02x\n", buffer[3], buffer[4], buffer[5], buffer[6]);
-				printf ("		Additional sense length: %d\n", buffer[7]);
-				printf ("		Command-specific information: %02x %02x %02x %02x\n", buffer[8], buffer[9], buffer[10], buffer[11]);
-				printf ("		Additional sense code: 0x%02x\n", buffer[12]);
-				printf ("		Additional sense code qualifier: %d\n", buffer[13]);
-				printf ("		Field replaceable unit code qualifier: %d\n", buffer[14]);
-				printf ("		SKSV: %d\n", buffer[15] >> 7);
-				printf ("		Sense key specfic 1: %d\n", buffer[15] & 0x7F);
-				printf ("		Sense key specfic 2: %d\n", buffer[16]);
-				printf ("		Sense key specfic 3: %d\n", buffer[17]);
+				printf ("	Information: %02x %02x %02x %02x\n", buffer[3], buffer[4], buffer[5], buffer[6]);
+				printf ("	Additional sense length: %d\n", buffer[7]);
+				printf ("	Command-specific information: %02x %02x %02x %02x\n", buffer[8], buffer[9], buffer[10], buffer[11]);
+				printf ("	Additional sense code: 0x%02x\n", buffer[12]);
+				printf ("	Additional sense code qualifier: %d\n", buffer[13]);
+				printf ("	Field replaceable unit code qualifier: %d\n", buffer[14]);
+				printf ("	SKSV: %d\n", buffer[15] >> 7);
+				printf ("	Sense key specfic 1: %d\n", buffer[15] & 0x7F);
+				printf ("	Sense key specfic 2: %d\n", buffer[16]);
+				printf ("	Sense key specfic 3: %d\n", buffer[17]);
+			} else if (display_usb_device_descriptor (&usb, buffer)) {
+				// nothing
 			} else {
 				dump_hex (buffer, 0, usb.len_cap);
 			}
 			printf ("\n");
-		}
-
-		if ((usb.epnum == 0x80) && (usb.len_cap == 18) && (buffer[1] == 1) && (buffer[0] == 18)) {
-			usb_device_descriptor *dd = (usb_device_descriptor*) buffer;
-			printf ("DEVICE DESCRIPTOR\n");
-			printf ("	bLength            : %d\n",     dd->bLength);
-			printf ("	bDescriptorType    : %d\n",     dd->bDescriptorType);
-			printf ("	bcdUSB             : 0x%04x\n", dd->bcdUSB);
-			printf ("	bDeviceClass       : %d\n",     dd->bDeviceClass);
-			printf ("	bDeviceSubClass    : %d\n",     dd->bDeviceSubclass);
-			printf ("	bDeviceProtocol    : %d\n",     dd->bDeviceProtocol);
-			printf ("	bMaxPacketSize0    : %d\n",     dd->bMaxPacketSize0);
-			printf ("	idVendor           : %d\n",     dd->idVendor);
-			printf ("	idProduct          : %d\n",     dd->idProduct);
-			printf ("	bcdDevice          : %d\n",     dd->bcdDevice);
-			printf ("	iManufacturer      : %d\n",     dd->iManufacturer);
-			printf ("	iProduct           : %d\n",     dd->iProduct);
-			printf ("	iSerialNumber      : %d\n",     dd->iSerialNumber);
-			printf ("	bNumConfigurations : %d\n",     dd->bNumConfigurations);
 		}
 
 		//printf ("\n");
