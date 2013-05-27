@@ -166,21 +166,678 @@ struct print_cursor {
 	int count;		/* without the terminating nul */
 };
 
-void usage(void);
-
-void print(const struct params *, const struct usbmon_packet_1 *ep, const unsigned char *data);
-void print_48(const struct params *, const struct usbmon_packet *ep, const unsigned char *data);
-void print_1u(const struct params *, const struct usbmon_packet_1 *ep, const unsigned char *data);
-void print_human(const struct params *, const struct usbmon_packet_1 *ep, const unsigned char *data, uint64_t start_sec);
-static void print_human_data(struct print_cursor *curp, const struct usbmon_packet_1 *ep, const unsigned char *data, int data_len);
-static void print_start(struct print_cursor *, char *buf, int size0);
-static void print_safe(struct print_cursor *, const char *fmt, ...);
-static int print_done(struct print_cursor *);
-void parse_params(struct params *p, char **argv);
-void make_device(const struct params *p);
-int find_major(void);
 
 struct params par;
+
+/**
+ * usage
+ */
+static void usage(void)
+{
+	fprintf(stderr, "usage: "
+	    "usbmon [-i usbN] [-f0|-fu|-fh] [-a0|-a1|-am] [-s len]\n");
+	exit(2);
+}
+
+/**
+ * print_start
+ */
+static void print_start(struct print_cursor *t, char *buf, int size0)
+{
+	t->pbuf = buf;
+	t->size = size0;
+	t->count = 0;
+}
+
+/**
+ * print_safe
+ */
+static void print_safe(struct print_cursor *t, const char *fmt, ...)
+{
+	va_list ap;
+	int len;
+
+	if (t->count+1 >= t->size)
+		return;
+
+	va_start(ap, fmt);
+	len = vsnprintf(t->pbuf + t->count, t->size - t->count, fmt, ap);
+	t->count += len;
+	va_end(ap);
+}
+
+/**
+ * print_done
+ */
+static int print_done(struct print_cursor *t)
+{
+	return t->count;
+}
+
+/**
+ * print_48
+ */
+static void print_48(const struct params *prm, const struct usbmon_packet *ep, const unsigned char *data)
+{
+	struct print_cursor pcur;
+	char udir, utype;
+	int data_len, i;
+	int cnt;
+	ssize_t rc;
+
+	print_start(&pcur, prm->print_buf, prm->print_size);
+
+	udir = ((ep->epnum & 0x80) != 0) ? 'i' : 'o';
+	switch (ep->xfer_type & 0x3) {
+	case PIPE_ISOCHRONOUS:	utype = 'Z'; break;
+	case PIPE_INTERRUPT:	utype = 'I'; break;
+	case PIPE_CONTROL:	utype = 'C'; break;
+	default: /* PIPE_BULK */  utype = 'B';
+	}
+	print_safe(&pcur,
+	    "%llx %u %c %c%c:%03u:%02u",
+	    (long long) ep->id,
+	    (unsigned int)(ep->ts_sec & 0xFFF) * 1000000 + ep->ts_usec,
+	    ep->type,
+	    utype, udir, ep->devnum, ep->epnum & 0x7f);
+
+	if (ep->flag_setup == 0) {   /* Setup packet is present and captured */
+		print_safe(&pcur,
+		    " s %02x %02x %04x %04x %04x",
+		    ep->setup[0],
+		    ep->setup[1],
+		    (ep->setup[3] << 8) | ep->setup[2],
+		    (ep->setup[5] << 8) | ep->setup[4],
+		    (ep->setup[7] << 8) | ep->setup[6]);
+	} else if (ep->flag_setup != '-') { /* Unable to capture setup packet */
+		print_safe(&pcur,
+		    " %c __ __ ____ ____ ____", ep->flag_setup);
+	} else {                     /* No setup for this kind of URB */
+		print_safe(&pcur, " %d", ep->status);
+	}
+	print_safe(&pcur, " %d", ep->length);
+
+	if (ep->length > 0) {
+		if (ep->flag_data == 0) {
+			print_safe(&pcur, " =");
+			if ((data_len = ep->len_cap) >= DATA_MAX)
+				data_len = DATA_MAX;
+			for (i = 0; i < data_len; i++) {
+				if (i % 4 == 0) {
+					print_safe(&pcur, " ");
+				}
+				print_safe(&pcur, "%02x", data[i]);
+			}
+			print_safe(&pcur, "\n");
+		} else {
+			print_safe(&pcur, " %c\n", ep->flag_data);
+		}
+	} else {
+		print_safe(&pcur, "\n");
+	}
+
+	cnt = print_done(&pcur);
+	if ((rc = write(1, prm->print_buf, cnt)) < cnt) {
+		if (rc < 0) {
+			fprintf(stderr, TAG ": Write error: %s\n",
+			    strerror(errno));
+		} else {
+			fprintf(stderr, TAG ": Short write\n");
+		}
+		exit(1);
+	}
+}
+
+/**
+ * print_1u
+ */
+static void print_1u(const struct params *prm, const struct usbmon_packet_1 *ep, const unsigned char *data)
+{
+	struct print_cursor pcur;
+	char udir, utype;
+	int data_len, i;
+	int ndesc;				/* Display this many */
+	const struct usbmon_isodesc *dp;
+	int cnt;
+	ssize_t rc;
+
+	print_start(&pcur, prm->print_buf, prm->print_size);
+
+	if ((data_len = ep->len_cap) < 0) {	/* Overflow */
+		data_len = 0;
+	}
+
+	udir = ((ep->epnum & 0x80) != 0) ? 'i' : 'o';
+	switch (ep->xfer_type & 0x3) {
+	case PIPE_ISOCHRONOUS:	utype = 'Z'; break;
+	case PIPE_INTERRUPT:	utype = 'I'; break;
+	case PIPE_CONTROL:	utype = 'C'; break;
+	default: /* PIPE_BULK */  utype = 'B';
+	}
+	print_safe(&pcur,
+	    "%llx %u %c %c%c:%u:%03u:%u",
+	    (long long) ep->id,
+	    (unsigned int)(ep->ts_sec & 0xFFF) * 1000000 + ep->ts_usec,
+	    ep->type,
+	    utype, udir, ep->busnum, ep->devnum, ep->epnum & 0x7f);
+
+	if (ep->type == 'E') {
+		print_safe(&pcur, " %d", ep->status);
+	} else {
+		if (ep->flag_setup == 0) {
+			/* Setup packet is present and captured */
+			print_safe(&pcur,
+			    " s %02x %02x %04x %04x %04x",
+			    ep->s.setup[0],
+			    ep->s.setup[1],
+			    (ep->s.setup[3] << 8) | ep->s.setup[2],
+			    (ep->s.setup[5] << 8) | ep->s.setup[4],
+			    (ep->s.setup[7] << 8) | ep->s.setup[6]);
+		} else if (ep->flag_setup != '-') {
+			/* Unable to capture setup packet */
+			print_safe(&pcur,
+			    " %c __ __ ____ ____ ____", ep->flag_setup);
+		} else {
+			/* No setup for this kind of URB */
+			print_safe(&pcur, " %d", ep->status);
+			if (usb_typeisoc(ep->xfer_type) ||
+			    usb_typeint(ep->xfer_type)) {
+				print_safe(&pcur, ":%d", ep->interval);
+			}
+			if (usb_typeisoc(ep->xfer_type)) {
+				print_safe(&pcur, ":%d", ep->start_frame);
+				if (ep->type == 'C') {
+					print_safe(&pcur,
+					    ":%d", ep->s.iso.error_count);
+				}
+			}
+		}
+		if (usb_typeisoc(ep->xfer_type)) {
+			/*
+			 * This is the number of descriptors used by HC.
+			 */
+			print_safe(&pcur, " %d", ep->s.iso.numdesc);
+
+			/*
+			 * This is the number of descriptors which we print.
+			 */
+			ndesc = ep->ndesc;
+			if (ndesc > ISODESC_MAX)
+				ndesc = ISODESC_MAX;
+			if (ndesc * sizeof(struct usbmon_isodesc) > data_len) {
+				ndesc = data_len / sizeof(struct usbmon_isodesc);
+			}
+			/* This is aligned by malloc */
+			dp = (struct usbmon_isodesc *) data;
+			for (i = 0; i < ndesc; i++) {
+				print_safe(&pcur,
+				    " %d:%u:%u",
+				    dp->iso_stat, dp->iso_off, dp->iso_len);
+				dp++;
+			}
+
+			/*
+			 * The number of descriptors captured is used to
+			 * find where the data starts.
+			 */
+			ndesc = ep->ndesc;
+			if (ndesc * sizeof(struct usbmon_isodesc) > data_len) {
+				data_len = 0;
+			} else {
+				data += ndesc * sizeof(struct usbmon_isodesc);
+				data_len -= ndesc * sizeof(struct usbmon_isodesc);
+			}
+		}
+	}
+
+	print_safe(&pcur, " %d", ep->length);
+
+	if (ep->length > 0) {
+		if (ep->flag_data == 0) {
+			print_safe(&pcur, " =");
+			if (data_len >= prm->data_max)
+				data_len = prm->data_max;
+			for (i = 0; i < data_len; i++) {
+				if (i % 4 == 0) {
+					print_safe(&pcur, " ");
+				}
+				print_safe(&pcur, "%02x", data[i]);
+			}
+			print_safe(&pcur, "\n");
+		} else {
+			print_safe(&pcur, " %c\n", ep->flag_data);
+		}
+	} else {
+		print_safe(&pcur, "\n");
+	}
+
+	cnt = print_done(&pcur);
+	if ((rc = write(1, prm->print_buf, cnt)) < cnt) {
+		if (rc < 0) {
+			fprintf(stderr, TAG ": Write error: %s\n",
+			    strerror(errno));
+		} else {
+			fprintf(stderr, TAG ": Short write\n");
+		}
+		exit(1);
+	}
+}
+
+/**
+ * print_human_data
+ */
+static void print_human_data(struct print_cursor *curs, const struct usbmon_packet_1 *ep, const unsigned char *data, int data_len)
+{
+	int any_printable;
+	int i;
+
+	print_safe(curs, "   ");
+	for (i = 0; i < data_len; i++) {
+		if (i % 4 == 0)
+			print_safe(curs, " ");
+		print_safe(curs, "%02x", data[i]);
+	}
+	print_safe(curs, "\n");
+
+	any_printable = 0;
+	for (i = 0; i < data_len; i++) {
+		if (isprint(data[i])) {
+			any_printable = 1;
+			break;
+		}
+	}
+	if (any_printable) {
+		print_safe(curs, "   ");
+		for (i = 0; i < data_len; i++) {
+			if (i % 4 == 0)
+				print_safe(curs, " ");
+			print_safe(curs, " %c",
+			    isprint(data[i]) ? data[i] : '.');
+		}
+		print_safe(curs, "\n");
+	}
+}
+
+/**
+ * print_human
+ */
+static void print_human(const struct params *prm, const struct usbmon_packet_1 *ep, const unsigned char *data, uint64_t start_sec)
+{
+	struct print_cursor pcur;
+	char udir, utype;
+	int data_len, i;
+	int ndesc;				/* Display this many */
+	const struct usbmon_isodesc *dp;
+	int cnt;
+	ssize_t rc;
+
+	print_start(&pcur, prm->print_buf, prm->print_size);
+
+	if ((data_len = ep->len_cap) < 0) {	/* Overflow */
+		data_len = 0;
+	}
+
+#if 0
+	enum { TAG_BUF_SIZE = 17 };
+	char tag_buf[TAG_BUF_SIZE];
+	print_human_tag(tag_buf, TAG_BUF_SIZE, prm->tagp, ep);
+#endif
+	/*
+	 * We cast into a truncated type for readability.
+	 * The danger of collisions is negligible.
+	 */
+	print_safe(&pcur, "%08x", (unsigned int) ep->id);
+
+	udir = ((ep->epnum & 0x80) != 0) ? 'i' : 'o';
+	switch (ep->xfer_type & 0x3) {
+	case PIPE_ISOCHRONOUS:	utype = 'Z'; break;
+	case PIPE_INTERRUPT:	utype = 'I'; break;
+	case PIPE_CONTROL:	utype = 'C'; break;
+	default: /* PIPE_BULK */  utype = 'B';
+	}
+	print_safe(&pcur,
+	    " %u.%06u %c %c%c:%u:%03u:%u",
+	    (unsigned int)(ep->ts_sec - start_sec), ep->ts_usec,
+	    ep->type,
+	    utype, udir, ep->busnum, ep->devnum, ep->epnum & 0x7f);
+
+	if (ep->type == 'E') {
+		print_safe(&pcur, " %d", ep->status);
+	} else {
+		if (ep->flag_setup == 0) {
+			/* Setup packet is present and captured */
+			print_safe(&pcur,
+			    " s %02x %02x %04x %04x %04x",
+			    ep->s.setup[0],
+			    ep->s.setup[1],
+			    (ep->s.setup[3] << 8) | ep->s.setup[2],
+			    (ep->s.setup[5] << 8) | ep->s.setup[4],
+			    (ep->s.setup[7] << 8) | ep->s.setup[6]);
+		} else if (ep->flag_setup != '-') {
+			/* Unable to capture setup packet */
+			print_safe(&pcur,
+			    " %c __ __ ____ ____ ____", ep->flag_setup);
+		} else {
+			/* No setup for this kind of URB */
+			if (ep->type == 'S' && ep->status == -EINPROGRESS) {
+				print_safe(&pcur, " -");
+			} else {
+				print_safe(&pcur, " %d", ep->status);
+			}
+			if (usb_typeisoc(ep->xfer_type) ||
+			    usb_typeint(ep->xfer_type)) {
+				print_safe(&pcur, ":%d", ep->interval);
+			}
+			if (usb_typeisoc(ep->xfer_type)) {
+				print_safe(&pcur, ":%d", ep->start_frame);
+				if (ep->type == 'C') {
+					print_safe(&pcur,
+					    ":%d", ep->s.iso.error_count);
+				}
+			}
+		}
+		if (usb_typeisoc(ep->xfer_type)) {
+			/*
+			 * This is the number of descriptors used by HC.
+			 */
+			print_safe(&pcur, " %d", ep->s.iso.numdesc);
+
+			/*
+			 * This is the number of descriptors which we print.
+			 */
+			ndesc = ep->ndesc;
+			if (ndesc > ISODESC_MAX)
+				ndesc = ISODESC_MAX;
+			if (ndesc * sizeof(struct usbmon_isodesc) > data_len) {
+				ndesc = data_len / sizeof(struct usbmon_isodesc);
+			}
+			/* This is aligned by malloc */
+			dp = (struct usbmon_isodesc *) data;
+			for (i = 0; i < ndesc; i++) {
+				print_safe(&pcur,
+				    " %d:%u:%u",
+				    dp->iso_stat, dp->iso_off, dp->iso_len);
+				dp++;
+			}
+
+			/*
+			 * The number of descriptors captured is used to
+			 * find where the data starts.
+			 */
+			ndesc = ep->ndesc;
+			if (ndesc * sizeof(struct usbmon_isodesc) > data_len) {
+				data_len = 0;
+			} else {
+				data += ndesc * sizeof(struct usbmon_isodesc);
+				data_len -= ndesc * sizeof(struct usbmon_isodesc);
+			}
+		}
+	}
+
+	print_safe(&pcur, " %d", ep->length);
+
+	if (ep->length > 0) {
+		if (ep->flag_data == 0) {
+			print_safe(&pcur, " =\n");
+			if (data_len >= prm->data_max)
+				data_len = prm->data_max;
+			print_human_data(&pcur, ep, data, data_len);
+		} else {
+			print_safe(&pcur, " %c\n", ep->flag_data);
+		}
+	} else {
+		print_safe(&pcur, "\n");
+	}
+
+	cnt = print_done(&pcur);
+	if ((rc = write(1, prm->print_buf, cnt)) < cnt) {
+		if (rc < 0) {
+			fprintf(stderr, TAG ": Write error: %s\n",
+			    strerror(errno));
+		} else {
+			fprintf(stderr, TAG ": Short write\n");
+		}
+		exit(1);
+	}
+}
+
+/**
+ * print
+ */
+static void print(const struct params *prm, const struct usbmon_packet_1 *ep, const unsigned char *data)
+{
+	static uint64_t start_sec = 0;
+
+	switch (par.format) {
+	case TFMT_OLD:
+		/*
+		 * Old and new APIs are made compatible just so we
+		 * can cast like this.
+		 */
+		print_48(&par, (struct usbmon_packet *) ep, data);
+		break;
+	case TFMT_1U:
+		print_1u(&par, ep, data);
+		break;
+	default: /* TFMT_HUMAN */
+		if (start_sec == 0)
+			start_sec = ep->ts_sec;
+		print_human(&par, ep, data, start_sec);
+	}
+}
+
+/**
+ * parse_params
+ */
+static void parse_params(struct params *p, char **argv)
+{
+	char *arg;
+	long num;
+
+	memset(p, 0, sizeof(struct params));
+	p->data_max = DATA_MAX;	/* Same as 1t text API. */
+	p->format = TFMT_HUMAN;
+	p->api = API_ANY;
+
+	while ((arg = *argv++) != NULL) {
+		if (arg[0] == '-') {
+			if (arg[1] == 0)
+				usage();
+			switch (arg[1]) {
+			case 'i':
+				if (arg[2] != 0)
+					usage();
+				if ((arg = *argv++) == NULL)
+					usage();
+				if (strncmp(arg, "usb", 3) == 0)
+					arg += 3;
+				if (!isdigit(arg[0]))
+					usage();
+				errno = 0;
+				num = strtol(arg, NULL, 10);
+				if (errno != 0)
+					usage();
+				if (num < 0 || num >= 128) {
+					fprintf(stderr, TAG ": Bus number %ld"
+					   " is out of bounds\n", num);
+					exit(2);
+				}
+				p->ifnum = num;
+				break;
+			case 'f':
+				switch (arg[2]) {
+				case '0':
+					p->format = TFMT_OLD;
+					break;
+				case 'u':
+					p->format = TFMT_1U;
+					break;
+				case 'h':
+					p->format = TFMT_HUMAN;
+					break;
+				default:
+					usage();
+				}
+				break;
+			case 'a':
+				switch (arg[2]) {
+				case '0':
+					p->api = API_B0;
+					break;
+				case '1':
+					p->api = API_B1;
+					break;
+				case 'm':
+					p->api = API_B1M;
+					break;
+				default:
+					usage();
+				}
+				break;
+			case 's':
+				if (arg[2] != 0)
+					usage();
+				if ((arg = *argv++) == NULL)
+					usage();
+				if (!isdigit(arg[0]))
+					usage();
+				errno = 0;
+				num = strtol(arg, NULL, 10);
+				if (errno != 0)
+					usage();
+				if (num < 0) {
+					fprintf(stderr, TAG
+					    ": negative size %ld\n", num);
+					exit(1);
+				}
+				p->data_max = num;
+				break;
+			default:
+				usage();
+			}
+		} else {
+			usage();
+		}
+	}
+
+	if (p->data_size == 0) {
+		p->data_size = p->data_max + 96;
+	}
+
+	if (p->devname == NULL) {
+		if ((p->devname = malloc(100)) == NULL) {
+			fprintf(stderr, TAG ": No core\n");
+			exit(1);
+		}
+		snprintf(p->devname, 100, "/dev/usbmon%d", p->ifnum);
+	}
+
+	if (p->format == TFMT_1U)
+		p->api = API_B1;
+
+	/*
+	 * This is somewhat approximate, but seems like not overflowing.
+	 * We cannot rely on print_safe, because when it triggers it violates
+	 * the documented output format. It only exists to prevent crashes.
+	 */
+	if (p->format == TFMT_OLD) {
+		if (p->data_max != DATA_MAX) {
+			fprintf(stderr, TAG ": -f0 requires -s 32\n");
+			exit(1);
+		}
+		p->print_size = 160;
+	} else {
+		p->print_size = 100;
+		p->print_size += (((p->data_max+3)/4 * 9) + 5) * 2;
+		p->print_size += 10 + ISODESC_MAX*26;	/* " %d:%u:%u" */
+	}
+	if ((p->print_buf = malloc(p->print_size)) == NULL) {
+		fprintf(stderr, TAG ": No core\n");
+		exit(1);
+	}
+}
+
+/**
+ * find_major
+ */
+static int find_major(void)
+{
+	long num;
+	FILE *df;
+	enum { LEN = 50 };
+	char buff[LEN], c, *p;
+	char *major, *mname;
+
+	if ((df = fopen("/proc/devices", "r")) == NULL) {
+		fprintf(stderr, TAG ": Can't open /proc/devices\n");
+		exit(1);
+	}
+	num = -1;
+	while (fgets(buff, LEN, df) != NULL) {
+		p = buff;
+		major = NULL;
+		mname = NULL;
+		for (p = buff; (c = *p) != 0; p++) {
+			if (major == NULL) {
+				if (c != ' ') {
+					major = p;
+				}
+			} else if (mname == NULL) {
+				if (!isdigit(c) && c != ' ') {
+					mname = p;
+				}
+			} else {
+				if (c == '\n') {
+					*p = 0;
+					break;
+				}
+			}
+		}
+		if (major != NULL && mname != NULL) {
+			if (strcmp(mname, "usbmon") == 0) {
+				errno = 0;
+				num = strtol(major, NULL, 10);
+				if (errno != 0) {
+					fprintf(stderr, TAG ": Syntax error "
+					    "in /proc/devices\n");
+					exit(1);
+				}
+				break;
+			}
+		}
+	}
+	fclose(df);
+
+	if (num == -1) {
+		fprintf(stderr, TAG ": Can't find usbmon in /proc/devices\n");
+		exit(1);
+	}
+
+	if (num <= 0 || num > INT_MAX) {
+		fprintf(stderr, TAG ": Weird major %ld in /proc/devices\n",
+		    num);
+		exit(1);
+	}
+
+	return (int) num;
+}
+
+/**
+ * make_device
+ */
+static void make_device(const struct params *p)
+{
+	int major;
+	dev_t dev;
+
+	major = find_major();
+	dev = makedev(major, p->ifnum);
+	if (mknod(p->devname, S_IFCHR|S_IRUSR|S_IWUSR, dev) != 0) {
+		fprintf(stderr, TAG ": Can't make device %s: %s\n",
+		    p->devname, strerror(errno));
+		exit(1);
+	}
+}
 
 /**
  * main
@@ -344,675 +1001,5 @@ int main(int argc __unused, char **argv)
 	}
 
 	// return 0;
-}
-
-/**
- * print
- */
-void print(const struct params *prm, const struct usbmon_packet_1 *ep, const unsigned char *data)
-{
-	static uint64_t start_sec = 0;
-
-	switch (par.format) {
-	case TFMT_OLD:
-		/*
-		 * Old and new APIs are made compatible just so we
-		 * can cast like this.
-		 */
-		print_48(&par, (struct usbmon_packet *) ep, data);
-		break;
-	case TFMT_1U:
-		print_1u(&par, ep, data);
-		break;
-	default: /* TFMT_HUMAN */
-		if (start_sec == 0)
-			start_sec = ep->ts_sec;
-		print_human(&par, ep, data, start_sec);
-	}
-}
-
-/**
- * print_48
- */
-void print_48(const struct params *prm, const struct usbmon_packet *ep, const unsigned char *data)
-{
-	struct print_cursor pcur;
-	char udir, utype;
-	int data_len, i;
-	int cnt;
-	ssize_t rc;
-
-	print_start(&pcur, prm->print_buf, prm->print_size);
-
-	udir = ((ep->epnum & 0x80) != 0) ? 'i' : 'o';
-	switch (ep->xfer_type & 0x3) {
-	case PIPE_ISOCHRONOUS:	utype = 'Z'; break;
-	case PIPE_INTERRUPT:	utype = 'I'; break;
-	case PIPE_CONTROL:	utype = 'C'; break;
-	default: /* PIPE_BULK */  utype = 'B';
-	}
-	print_safe(&pcur,
-	    "%llx %u %c %c%c:%03u:%02u",
-	    (long long) ep->id,
-	    (unsigned int)(ep->ts_sec & 0xFFF) * 1000000 + ep->ts_usec,
-	    ep->type,
-	    utype, udir, ep->devnum, ep->epnum & 0x7f);
-
-	if (ep->flag_setup == 0) {   /* Setup packet is present and captured */
-		print_safe(&pcur,
-		    " s %02x %02x %04x %04x %04x",
-		    ep->setup[0],
-		    ep->setup[1],
-		    (ep->setup[3] << 8) | ep->setup[2],
-		    (ep->setup[5] << 8) | ep->setup[4],
-		    (ep->setup[7] << 8) | ep->setup[6]);
-	} else if (ep->flag_setup != '-') { /* Unable to capture setup packet */
-		print_safe(&pcur,
-		    " %c __ __ ____ ____ ____", ep->flag_setup);
-	} else {                     /* No setup for this kind of URB */
-		print_safe(&pcur, " %d", ep->status);
-	}
-	print_safe(&pcur, " %d", ep->length);
-
-	if (ep->length > 0) {
-		if (ep->flag_data == 0) {
-			print_safe(&pcur, " =");
-			if ((data_len = ep->len_cap) >= DATA_MAX)
-				data_len = DATA_MAX;
-			for (i = 0; i < data_len; i++) {
-				if (i % 4 == 0) {
-					print_safe(&pcur, " ");
-				}
-				print_safe(&pcur, "%02x", data[i]);
-			}
-			print_safe(&pcur, "\n");
-		} else {
-			print_safe(&pcur, " %c\n", ep->flag_data);
-		}
-	} else {
-		print_safe(&pcur, "\n");
-	}
-
-	cnt = print_done(&pcur);
-	if ((rc = write(1, prm->print_buf, cnt)) < cnt) {
-		if (rc < 0) {
-			fprintf(stderr, TAG ": Write error: %s\n",
-			    strerror(errno));
-		} else {
-			fprintf(stderr, TAG ": Short write\n");
-		}
-		exit(1);
-	}
-}
-
-/**
- * print_1u
- */
-void print_1u(const struct params *prm, const struct usbmon_packet_1 *ep, const unsigned char *data)
-{
-	struct print_cursor pcur;
-	char udir, utype;
-	int data_len, i;
-	int ndesc;				/* Display this many */
-	const struct usbmon_isodesc *dp;
-	int cnt;
-	ssize_t rc;
-
-	print_start(&pcur, prm->print_buf, prm->print_size);
-
-	if ((data_len = ep->len_cap) < 0) {	/* Overflow */
-		data_len = 0;
-	}
-
-	udir = ((ep->epnum & 0x80) != 0) ? 'i' : 'o';
-	switch (ep->xfer_type & 0x3) {
-	case PIPE_ISOCHRONOUS:	utype = 'Z'; break;
-	case PIPE_INTERRUPT:	utype = 'I'; break;
-	case PIPE_CONTROL:	utype = 'C'; break;
-	default: /* PIPE_BULK */  utype = 'B';
-	}
-	print_safe(&pcur,
-	    "%llx %u %c %c%c:%u:%03u:%u",
-	    (long long) ep->id,
-	    (unsigned int)(ep->ts_sec & 0xFFF) * 1000000 + ep->ts_usec,
-	    ep->type,
-	    utype, udir, ep->busnum, ep->devnum, ep->epnum & 0x7f);
-
-	if (ep->type == 'E') {
-		print_safe(&pcur, " %d", ep->status);
-	} else {
-		if (ep->flag_setup == 0) {
-			/* Setup packet is present and captured */
-			print_safe(&pcur,
-			    " s %02x %02x %04x %04x %04x",
-			    ep->s.setup[0],
-			    ep->s.setup[1],
-			    (ep->s.setup[3] << 8) | ep->s.setup[2],
-			    (ep->s.setup[5] << 8) | ep->s.setup[4],
-			    (ep->s.setup[7] << 8) | ep->s.setup[6]);
-		} else if (ep->flag_setup != '-') {
-			/* Unable to capture setup packet */
-			print_safe(&pcur,
-			    " %c __ __ ____ ____ ____", ep->flag_setup);
-		} else {
-			/* No setup for this kind of URB */
-			print_safe(&pcur, " %d", ep->status);
-			if (usb_typeisoc(ep->xfer_type) ||
-			    usb_typeint(ep->xfer_type)) {
-				print_safe(&pcur, ":%d", ep->interval);
-			}
-			if (usb_typeisoc(ep->xfer_type)) {
-				print_safe(&pcur, ":%d", ep->start_frame);
-				if (ep->type == 'C') {
-					print_safe(&pcur,
-					    ":%d", ep->s.iso.error_count);
-				}
-			}
-		}
-		if (usb_typeisoc(ep->xfer_type)) {
-			/*
-			 * This is the number of descriptors used by HC.
-			 */
-			print_safe(&pcur, " %d", ep->s.iso.numdesc);
-
-			/*
-			 * This is the number of descriptors which we print.
-			 */
-			ndesc = ep->ndesc;
-			if (ndesc > ISODESC_MAX)
-				ndesc = ISODESC_MAX;
-			if (ndesc * sizeof(struct usbmon_isodesc) > data_len) {
-				ndesc = data_len / sizeof(struct usbmon_isodesc);
-			}
-			/* This is aligned by malloc */
-			dp = (struct usbmon_isodesc *) data;
-			for (i = 0; i < ndesc; i++) {
-				print_safe(&pcur,
-				    " %d:%u:%u",
-				    dp->iso_stat, dp->iso_off, dp->iso_len);
-				dp++;
-			}
-
-			/*
-			 * The number of descriptors captured is used to
-			 * find where the data starts.
-			 */
-			ndesc = ep->ndesc;
-			if (ndesc * sizeof(struct usbmon_isodesc) > data_len) {
-				data_len = 0;
-			} else {
-				data += ndesc * sizeof(struct usbmon_isodesc);
-				data_len -= ndesc * sizeof(struct usbmon_isodesc);
-			}
-		}
-	}
-
-	print_safe(&pcur, " %d", ep->length);
-
-	if (ep->length > 0) {
-		if (ep->flag_data == 0) {
-			print_safe(&pcur, " =");
-			if (data_len >= prm->data_max)
-				data_len = prm->data_max;
-			for (i = 0; i < data_len; i++) {
-				if (i % 4 == 0) {
-					print_safe(&pcur, " ");
-				}
-				print_safe(&pcur, "%02x", data[i]);
-			}
-			print_safe(&pcur, "\n");
-		} else {
-			print_safe(&pcur, " %c\n", ep->flag_data);
-		}
-	} else {
-		print_safe(&pcur, "\n");
-	}
-
-	cnt = print_done(&pcur);
-	if ((rc = write(1, prm->print_buf, cnt)) < cnt) {
-		if (rc < 0) {
-			fprintf(stderr, TAG ": Write error: %s\n",
-			    strerror(errno));
-		} else {
-			fprintf(stderr, TAG ": Short write\n");
-		}
-		exit(1);
-	}
-}
-
-/**
- * print_human
- */
-void print_human(const struct params *prm, const struct usbmon_packet_1 *ep, const unsigned char *data, uint64_t start_sec)
-{
-	struct print_cursor pcur;
-	char udir, utype;
-	int data_len, i;
-	int ndesc;				/* Display this many */
-	const struct usbmon_isodesc *dp;
-	int cnt;
-	ssize_t rc;
-
-	print_start(&pcur, prm->print_buf, prm->print_size);
-
-	if ((data_len = ep->len_cap) < 0) {	/* Overflow */
-		data_len = 0;
-	}
-
-#if 0
-	enum { TAG_BUF_SIZE = 17 };
-	char tag_buf[TAG_BUF_SIZE];
-	print_human_tag(tag_buf, TAG_BUF_SIZE, prm->tagp, ep);
-#endif
-	/*
-	 * We cast into a truncated type for readability.
-	 * The danger of collisions is negligible.
-	 */
-	print_safe(&pcur, "%08x", (unsigned int) ep->id);
-
-	udir = ((ep->epnum & 0x80) != 0) ? 'i' : 'o';
-	switch (ep->xfer_type & 0x3) {
-	case PIPE_ISOCHRONOUS:	utype = 'Z'; break;
-	case PIPE_INTERRUPT:	utype = 'I'; break;
-	case PIPE_CONTROL:	utype = 'C'; break;
-	default: /* PIPE_BULK */  utype = 'B';
-	}
-	print_safe(&pcur,
-	    " %u.%06u %c %c%c:%u:%03u:%u",
-	    (unsigned int)(ep->ts_sec - start_sec), ep->ts_usec,
-	    ep->type,
-	    utype, udir, ep->busnum, ep->devnum, ep->epnum & 0x7f);
-
-	if (ep->type == 'E') {
-		print_safe(&pcur, " %d", ep->status);
-	} else {
-		if (ep->flag_setup == 0) {
-			/* Setup packet is present and captured */
-			print_safe(&pcur,
-			    " s %02x %02x %04x %04x %04x",
-			    ep->s.setup[0],
-			    ep->s.setup[1],
-			    (ep->s.setup[3] << 8) | ep->s.setup[2],
-			    (ep->s.setup[5] << 8) | ep->s.setup[4],
-			    (ep->s.setup[7] << 8) | ep->s.setup[6]);
-		} else if (ep->flag_setup != '-') {
-			/* Unable to capture setup packet */
-			print_safe(&pcur,
-			    " %c __ __ ____ ____ ____", ep->flag_setup);
-		} else {
-			/* No setup for this kind of URB */
-			if (ep->type == 'S' && ep->status == -EINPROGRESS) {
-				print_safe(&pcur, " -");
-			} else {
-				print_safe(&pcur, " %d", ep->status);
-			}
-			if (usb_typeisoc(ep->xfer_type) ||
-			    usb_typeint(ep->xfer_type)) {
-				print_safe(&pcur, ":%d", ep->interval);
-			}
-			if (usb_typeisoc(ep->xfer_type)) {
-				print_safe(&pcur, ":%d", ep->start_frame);
-				if (ep->type == 'C') {
-					print_safe(&pcur,
-					    ":%d", ep->s.iso.error_count);
-				}
-			}
-		}
-		if (usb_typeisoc(ep->xfer_type)) {
-			/*
-			 * This is the number of descriptors used by HC.
-			 */
-			print_safe(&pcur, " %d", ep->s.iso.numdesc);
-
-			/*
-			 * This is the number of descriptors which we print.
-			 */
-			ndesc = ep->ndesc;
-			if (ndesc > ISODESC_MAX)
-				ndesc = ISODESC_MAX;
-			if (ndesc * sizeof(struct usbmon_isodesc) > data_len) {
-				ndesc = data_len / sizeof(struct usbmon_isodesc);
-			}
-			/* This is aligned by malloc */
-			dp = (struct usbmon_isodesc *) data;
-			for (i = 0; i < ndesc; i++) {
-				print_safe(&pcur,
-				    " %d:%u:%u",
-				    dp->iso_stat, dp->iso_off, dp->iso_len);
-				dp++;
-			}
-
-			/*
-			 * The number of descriptors captured is used to
-			 * find where the data starts.
-			 */
-			ndesc = ep->ndesc;
-			if (ndesc * sizeof(struct usbmon_isodesc) > data_len) {
-				data_len = 0;
-			} else {
-				data += ndesc * sizeof(struct usbmon_isodesc);
-				data_len -= ndesc * sizeof(struct usbmon_isodesc);
-			}
-		}
-	}
-
-	print_safe(&pcur, " %d", ep->length);
-
-	if (ep->length > 0) {
-		if (ep->flag_data == 0) {
-			print_safe(&pcur, " =\n");
-			if (data_len >= prm->data_max)
-				data_len = prm->data_max;
-			print_human_data(&pcur, ep, data, data_len);
-		} else {
-			print_safe(&pcur, " %c\n", ep->flag_data);
-		}
-	} else {
-		print_safe(&pcur, "\n");
-	}
-
-	cnt = print_done(&pcur);
-	if ((rc = write(1, prm->print_buf, cnt)) < cnt) {
-		if (rc < 0) {
-			fprintf(stderr, TAG ": Write error: %s\n",
-			    strerror(errno));
-		} else {
-			fprintf(stderr, TAG ": Short write\n");
-		}
-		exit(1);
-	}
-}
-
-/**
- * print_human_data
- */
-static void print_human_data(struct print_cursor *curs, const struct usbmon_packet_1 *ep, const unsigned char *data, int data_len)
-{
-	int any_printable;
-	int i;
-
-	print_safe(curs, "   ");
-	for (i = 0; i < data_len; i++) {
-		if (i % 4 == 0)
-			print_safe(curs, " ");
-		print_safe(curs, "%02x", data[i]);
-	}
-	print_safe(curs, "\n");
-
-	any_printable = 0;
-	for (i = 0; i < data_len; i++) {
-		if (isprint(data[i])) {
-			any_printable = 1;
-			break;
-		}
-	}
-	if (any_printable) {
-		print_safe(curs, "   ");
-		for (i = 0; i < data_len; i++) {
-			if (i % 4 == 0)
-				print_safe(curs, " ");
-			print_safe(curs, " %c",
-			    isprint(data[i]) ? data[i] : '.');
-		}
-		print_safe(curs, "\n");
-	}
-}
-
-/**
- * print_start
- */
-static void print_start(struct print_cursor *t, char *buf, int size0)
-{
-	t->pbuf = buf;
-	t->size = size0;
-	t->count = 0;
-}
-
-/**
- * print_safe
- */
-static void print_safe(struct print_cursor *t, const char *fmt, ...)
-{
-	va_list ap;
-	int len;
-
-	if (t->count+1 >= t->size)
-		return;
-
-	va_start(ap, fmt);
-	len = vsnprintf(t->pbuf + t->count, t->size - t->count, fmt, ap);
-	t->count += len;
-	va_end(ap);
-}
-
-/**
- * print_done
- */
-static int print_done(struct print_cursor *t)
-{
-	return t->count;
-}
-
-/**
- * parse_params
- */
-void parse_params(struct params *p, char **argv)
-{
-	char *arg;
-	long num;
-
-	memset(p, 0, sizeof(struct params));
-	p->data_max = DATA_MAX;	/* Same as 1t text API. */
-	p->format = TFMT_HUMAN;
-	p->api = API_ANY;
-
-	while ((arg = *argv++) != NULL) {
-		if (arg[0] == '-') {
-			if (arg[1] == 0)
-				usage();
-			switch (arg[1]) {
-			case 'i':
-				if (arg[2] != 0)
-					usage();
-				if ((arg = *argv++) == NULL)
-					usage();
-				if (strncmp(arg, "usb", 3) == 0)
-					arg += 3;
-				if (!isdigit(arg[0]))
-					usage();
-				errno = 0;
-				num = strtol(arg, NULL, 10);
-				if (errno != 0)
-					usage();
-				if (num < 0 || num >= 128) {
-					fprintf(stderr, TAG ": Bus number %ld"
-					   " is out of bounds\n", num);
-					exit(2);
-				}
-				p->ifnum = num;
-				break;
-			case 'f':
-				switch (arg[2]) {
-				case '0':
-					p->format = TFMT_OLD;
-					break;
-				case 'u':
-					p->format = TFMT_1U;
-					break;
-				case 'h':
-					p->format = TFMT_HUMAN;
-					break;
-				default:
-					usage();
-				}
-				break;
-			case 'a':
-				switch (arg[2]) {
-				case '0':
-					p->api = API_B0;
-					break;
-				case '1':
-					p->api = API_B1;
-					break;
-				case 'm':
-					p->api = API_B1M;
-					break;
-				default:
-					usage();
-				}
-				break;
-			case 's':
-				if (arg[2] != 0)
-					usage();
-				if ((arg = *argv++) == NULL)
-					usage();
-				if (!isdigit(arg[0]))
-					usage();
-				errno = 0;
-				num = strtol(arg, NULL, 10);
-				if (errno != 0)
-					usage();
-				if (num < 0) {
-					fprintf(stderr, TAG
-					    ": negative size %ld\n", num);
-					exit(1);
-				}
-				p->data_max = num;
-				break;
-			default:
-				usage();
-			}
-		} else {
-			usage();
-		}
-	}
-
-	if (p->data_size == 0) {
-		p->data_size = p->data_max + 96;
-	}
-
-	if (p->devname == NULL) {
-		if ((p->devname = malloc(100)) == NULL) {
-			fprintf(stderr, TAG ": No core\n");
-			exit(1);
-		}
-		snprintf(p->devname, 100, "/dev/usbmon%d", p->ifnum);
-	}
-
-	if (p->format == TFMT_1U)
-		p->api = API_B1;
-
-	/*
-	 * This is somewhat approximate, but seems like not overflowing.
-	 * We cannot rely on print_safe, because when it triggers it violates
-	 * the documented output format. It only exists to prevent crashes.
-	 */
-	if (p->format == TFMT_OLD) {
-		if (p->data_max != DATA_MAX) {
-			fprintf(stderr, TAG ": -f0 requires -s 32\n");
-			exit(1);
-		}
-		p->print_size = 160;
-	} else {
-		p->print_size = 100;
-		p->print_size += (((p->data_max+3)/4 * 9) + 5) * 2;
-		p->print_size += 10 + ISODESC_MAX*26;	/* " %d:%u:%u" */
-	}
-	if ((p->print_buf = malloc(p->print_size)) == NULL) {
-		fprintf(stderr, TAG ": No core\n");
-		exit(1);
-	}
-}
-
-/**
- * make_device
- */
-void make_device(const struct params *p)
-{
-	int major;
-	dev_t dev;
-
-	major = find_major();
-	dev = makedev(major, p->ifnum);
-	if (mknod(p->devname, S_IFCHR|S_IRUSR|S_IWUSR, dev) != 0) {
-		fprintf(stderr, TAG ": Can't make device %s: %s\n",
-		    p->devname, strerror(errno));
-		exit(1);
-	}
-}
-
-/**
- * find_major
- */
-int find_major(void)
-{
-	long num;
-	FILE *df;
-	enum { LEN = 50 };
-	char buff[LEN], c, *p;
-	char *major, *mname;
-
-	if ((df = fopen("/proc/devices", "r")) == NULL) {
-		fprintf(stderr, TAG ": Can't open /proc/devices\n");
-		exit(1);
-	}
-	num = -1;
-	while (fgets(buff, LEN, df) != NULL) {
-		p = buff;
-		major = NULL;
-		mname = NULL;
-		for (p = buff; (c = *p) != 0; p++) {
-			if (major == NULL) {
-				if (c != ' ') {
-					major = p;
-				}
-			} else if (mname == NULL) {
-				if (!isdigit(c) && c != ' ') {
-					mname = p;
-				}
-			} else {
-				if (c == '\n') {
-					*p = 0;
-					break;
-				}
-			}
-		}
-		if (major != NULL && mname != NULL) {
-			if (strcmp(mname, "usbmon") == 0) {
-				errno = 0;
-				num = strtol(major, NULL, 10);
-				if (errno != 0) {
-					fprintf(stderr, TAG ": Syntax error "
-					    "in /proc/devices\n");
-					exit(1);
-				}
-				break;
-			}
-		}
-	}
-	fclose(df);
-
-	if (num == -1) {
-		fprintf(stderr, TAG ": Can't find usbmon in /proc/devices\n");
-		exit(1);
-	}
-
-	if (num <= 0 || num > INT_MAX) {
-		fprintf(stderr, TAG ": Weird major %ld in /proc/devices\n",
-		    num);
-		exit(1);
-	}
-
-	return (int) num;
-}
-
-/**
- * usage
- */
-void usage(void)
-{
-	fprintf(stderr, "usage: "
-	    "usbmon [-i usbN] [-f0|-fu|-fh] [-a0|-a1|-am] [-s len]\n");
-	exit(2);
 }
 
