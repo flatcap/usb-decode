@@ -1,9 +1,7 @@
-#include <stdarg.h>
-#include <stdint.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <libusb.h>
 
 #define bool int
@@ -38,17 +36,6 @@ static int perr (char const *format, ...)
 #define INQUIRY_LENGTH                0x24
 #define READ_CAPACITY_LENGTH          0x08
 
-// HID Class-Specific Requests values. See section 7.2 of the HID specifications
-#define HID_GET_REPORT                0x01
-#define HID_GET_IDLE                  0x02
-#define HID_GET_PROTOCOL              0x03
-#define HID_SET_REPORT                0x09
-#define HID_SET_IDLE                  0x0A
-#define HID_SET_PROTOCOL              0x0B
-#define HID_REPORT_TYPE_INPUT         0x01
-#define HID_REPORT_TYPE_OUTPUT        0x02
-#define HID_REPORT_TYPE_FEATURE       0x03
-
 // Mass Storage Requests values. See section 3 of the Bulk-Only Mass Storage Class specifications
 #define BOMS_RESET                    0xFF
 #define BOMS_GET_MAX_LUN              0xFE
@@ -57,24 +44,24 @@ static int perr (char const *format, ...)
  * Section 5.1: Command Block Wrapper (CBW)
  */
 struct command_block_wrapper {
-	uint8_t dCBWSignature[4];
-	uint32_t dCBWTag;
-	uint32_t dCBWDataTransferLength;
-	uint8_t bmCBWFlags;
-	uint8_t bCBWLUN;
-	uint8_t bCBWCBLength;
-	uint8_t CBWCB[16];
-};
+	uint8_t dCBWSignature[4];	// 0x00
+	uint32_t dCBWTag;		// 0x04
+	uint32_t dCBWDataTransferLength;// 0x08
+	uint8_t bmCBWFlags;		// 0x0C
+	uint8_t bCBWLUN;		// 0x0D
+	uint8_t bCBWCBLength;		// 0x0E
+	uint8_t CBWCB[16];		// 0x0F
+}  __attribute__((__packed__));
 
 /**
  * Section 5.2: Command Status Wrapper (CSW)
  */
 struct command_status_wrapper {
-	uint8_t dCSWSignature[4];
-	uint32_t dCSWTag;
-	uint32_t dCSWDataResidue;
-	uint8_t bCSWStatus;
-};
+	uint8_t dCSWSignature[4];	// 0x00
+	uint32_t dCSWTag;		// 0x04
+	uint32_t dCSWDataResidue;	// 0x08
+	uint8_t bCSWStatus;		// 0x0C
+}  __attribute__((__packed__));
 
 
 /**
@@ -176,7 +163,7 @@ static int send_mass_storage_command (libusb_device_handle *handle, uint8_t endp
 	i = 0;
 	do {
 		// The transfer length must always be exactly 31 bytes.
-		r = libusb_bulk_transfer (handle, endpoint, (unsigned char*)&cbw, 31, &size, 1000);
+		r = libusb_bulk_transfer (handle, endpoint, (unsigned char*)&cbw, sizeof (cbw), &size, 1000);
 		if (r == LIBUSB_ERROR_PIPE) {
 			libusb_clear_halt (handle, endpoint);
 		}
@@ -203,7 +190,9 @@ static int get_mass_storage_status (libusb_device_handle *handle, uint8_t endpoi
 	// clear the stall and try again.
 	i = 0;
 	do {
-		r = libusb_bulk_transfer (handle, endpoint, (unsigned char*)&csw, 13, &size, 1000);
+		r = libusb_bulk_transfer (handle, endpoint, (unsigned char*)&csw, sizeof (csw), &size, 1000);
+		//printf ("\e[33mcsw size = %lu, size read = %d\e[0m\n", sizeof (csw), size);
+		//display_buffer_hex ((unsigned char*) &csw, sizeof (csw));
 		if (r == LIBUSB_ERROR_PIPE) {
 			libusb_clear_halt (handle, endpoint);
 		}
@@ -213,8 +202,8 @@ static int get_mass_storage_status (libusb_device_handle *handle, uint8_t endpoi
 		perr ("	get_mass_storage_status: %s\n", libusb_error_name (r));
 		return -1;
 	}
-	if (size != 13) {
-		perr ("	get_mass_storage_status: received %d bytes (expected 13)\n", size);
+	if (size != sizeof (csw)) {
+		perr ("	get_mass_storage_status: received %d bytes (expected %d)\n", size, sizeof (csw));
 		return -1;
 	}
 	if (csw.dCSWTag != expected_tag) {
@@ -312,6 +301,7 @@ static int test_mass_storage (libusb_device_handle *handle, uint8_t endpoint_in,
 	send_mass_storage_command (handle, endpoint_out, lun, cdb, LIBUSB_ENDPOINT_IN, INQUIRY_LENGTH, &expected_tag);
 	CALL_CHECK (libusb_bulk_transfer (handle, endpoint_in, (unsigned char*)&buffer, INQUIRY_LENGTH, &size, 1000));
 	printf ("	received %d bytes\n", size);
+	display_buffer_hex (buffer, size);
 	// The following strings are not zero terminated
 	for (i=0; i<8; i++) {
 		vid[i] = buffer[8+i];
@@ -335,6 +325,7 @@ static int test_mass_storage (libusb_device_handle *handle, uint8_t endpoint_in,
 	send_mass_storage_command (handle, endpoint_out, lun, cdb, LIBUSB_ENDPOINT_IN, READ_CAPACITY_LENGTH, &expected_tag);
 	CALL_CHECK (libusb_bulk_transfer (handle, endpoint_in, (unsigned char*)&buffer, READ_CAPACITY_LENGTH, &size, 1000));
 	printf ("	received %d bytes\n", size);
+	display_buffer_hex (buffer, size);
 	max_lba = be_to_int32 (&buffer[0]);
 	block_size = be_to_int32 (&buffer[4]);
 	device_size = ((double) (max_lba+1))*block_size/ (1024*1024*1024);
@@ -348,6 +339,7 @@ static int test_mass_storage (libusb_device_handle *handle, uint8_t endpoint_in,
 		perr ("	unable to allocate data buffer\n");
 		return -1;
 	}
+	memset (data, 'R', (max_lba+1)*block_size);
 
 	// Send Read
 	printf ("Attempting to read %d bytes:\n", block_size);
@@ -362,7 +354,8 @@ static int test_mass_storage (libusb_device_handle *handle, uint8_t endpoint_in,
 	if (get_mass_storage_status (handle, endpoint_in, expected_tag) == -2) {
 		get_sense (handle, endpoint_in, endpoint_out);
 	} else {
-		display_buffer_hex (data, size);
+		if (0)
+			display_buffer_hex (data, size);
 	}
 	free (data);
 
@@ -372,7 +365,7 @@ static int test_mass_storage (libusb_device_handle *handle, uint8_t endpoint_in,
 /**
  * test_device
  */
-static int test_device (uint16_t vid, uint16_t pid)
+static int test_device (libusb_context *ctx, uint16_t vid, uint16_t pid)
 {
 	libusb_device_handle *handle;
 	libusb_device *dev;
@@ -393,8 +386,7 @@ static int test_device (uint16_t vid, uint16_t pid)
 	uint8_t endpoint_in = 0, endpoint_out = 0;	// default IN and OUT endpoints
 
 	printf ("Opening device %04X:%04X...\n", vid, pid);
-	handle = libusb_open_device_with_vid_pid (NULL, vid, pid);
-
+	handle = libusb_open_device_with_vid_pid (ctx, vid, pid);
 	if (handle == NULL) {
 		perr ("  Failed.\n");
 		return -1;
@@ -403,7 +395,7 @@ static int test_device (uint16_t vid, uint16_t pid)
 	dev = libusb_get_device (handle);
 	bus = libusb_get_bus_number (dev);
 
-	r = libusb_get_port_path (NULL, dev, port_path, sizeof (port_path));
+	r = libusb_get_port_path (ctx, dev, port_path, sizeof (port_path));
 	if (r > 0) {
 		printf ("\nDevice properties:\n");
 		printf ("        bus number: %d\n", bus);
@@ -505,14 +497,8 @@ static int test_device (uint16_t vid, uint16_t pid)
 			printf ("	String (0x%02X): \"%s\"\n", string_index[i], string);
 		}
 	}
-	// Read the OS String Descriptor
-	if (libusb_get_string_descriptor_ascii (handle, 0xEE, (unsigned char*)string, 128) >= 0) {
-		printf ("	String (0x%02X): \"%s\"\n", 0xEE, string);
-		// If this is a Microsoft OS String Descriptor,
-		// attempt to read the WinUSB extended Feature Descriptors
-	}
 
-	if (0)
+	if (1)
 		CALL_CHECK (test_mass_storage (handle, endpoint_in, endpoint_out));
 
 	printf ("\n");
@@ -537,67 +523,21 @@ static int test_device (uint16_t vid, uint16_t pid)
  */
 int main (int argc, char *argv[])
 {
-	bool show_help = false;
-	bool debug_mode = false;
 	const struct libusb_version *version;
-	int j, r;
-	size_t i, arglen;
-	unsigned tmp_vid, tmp_pid;
-	uint16_t VID, PID;
-
-	// Default to generic, expecting VID:PID
-	VID = 0;
-	PID = 0;
-
-	if (argc >= 2) {
-		for (j = 1; j<argc; j++) {
-			arglen = strlen (argv[j]);
-			if (((argv[j][0] == '-') || (argv[j][0] == '/')) && (arglen >= 2) ) {
-				switch (argv[j][1]) {
-					case 'd':
-						debug_mode = true;
-						break;
-					default:
-						show_help = true;
-						break;
-				}
-			} else {
-				for (i=0; i<arglen; i++) {
-					if (argv[j][i] == ':')
-						break;
-				}
-				if (i != arglen) {
-					if (sscanf (argv[j], "%x:%x" , &tmp_vid, &tmp_pid) != 2) {
-						printf ("	Please specify VID & PID as \"vid:pid\" in hexadecimal format\n");
-						return 1;
-					}
-					VID = (uint16_t)tmp_vid;
-					PID = (uint16_t)tmp_pid;
-				} else {
-					show_help = true;
-				}
-			}
-		}
-	}
-
-	if ((show_help) || (argc == 1) || (argc > 7)) {
-		printf ("usage: %s [-h] [-d] [vid:pid]\n", argv[0]);
-		printf ("	-h : display usage\n");
-		printf ("	-d : enable debug output\n");
-		return 0;
-	}
+	libusb_context *ctx = NULL;
 
 	version = libusb_get_version();
 	printf ("Using libusbx v%d.%d.%d.%d\n\n", version->major, version->minor, version->micro, version->nano);
-	r = libusb_init (NULL);
-	if (r < 0)
-		return r;
 
-	libusb_set_debug (NULL, debug_mode?LIBUSB_LOG_LEVEL_DEBUG:LIBUSB_LOG_LEVEL_INFO);
+	if (libusb_init (&ctx) < 0)
+		return 1;
 
-	test_device (VID, PID);
+	if ((argc > 1) && (argv[1][0] == '-') && (argv[1][1] == 'd'))
+		libusb_set_debug (ctx, LIBUSB_LOG_LEVEL_DEBUG);
 
-	libusb_exit (NULL);
+	test_device (ctx, 0x1bb4, 0x000a);
+
+	libusb_exit (ctx);
 
 	return 0;
 }
