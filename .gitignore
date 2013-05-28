@@ -1,8 +1,11 @@
 activity.bin
+attach
 bulk
 d1.pcap
 d?.txt
+detach
 dump
+ioctl
 mmap
 out
 usb
@@ -10,4 +13,3 @@ usb_list
 usbmon
 watcher
 xusb
-ioctl
