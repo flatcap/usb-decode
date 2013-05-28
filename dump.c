@@ -3,12 +3,16 @@
 #include <ctype.h>
 #include <string.h>
 #include <stdint.h>
-
-#include "usb.h"
+#include <time.h>
 
 typedef unsigned char      bool;
 const bool true  = 1;
 const bool false = 0;
+
+#include "usb.h"
+#include "log.h"
+
+#include "log.cpp"
 
 typedef unsigned char      u8;
 typedef unsigned short     u16;
@@ -91,6 +95,8 @@ static void dump_hex (void *buf, int start, int length)
  */
 static void dump_usb (u8 *data)
 {
+	char time_buf[64];
+	struct tm *tm = NULL;
 	struct usbmon_packet *u = (struct usbmon_packet *) data;
 	char *type;
 	char *xfer;
@@ -150,8 +156,14 @@ static void dump_usb (u8 *data)
 	printf ("URB bus id: %d\n", u->busnum);
 	printf ("Device setup request: %s\n", setup);
 	printf ("Data: %s\n", present);
+#if 0
 	printf ("URB sec: %lld\n", u->ts_sec);
 	printf ("URB usec: %d\n", u->ts_usec);
+#else
+	tm = localtime ((time_t*)&u->ts_sec);
+	strftime (time_buf, sizeof (time_buf), "%Y-%m-%d %H:%M:%S", tm);
+	printf ("URB Time: %s.%d\n", time_buf, u->ts_usec);
+#endif
 	printf ("URB status: %s (%d)\n", status, u->status);
 	printf ("URB length: %d\n", u->length);
 	printf ("Data length: %d\n", u->len_cap);
@@ -273,6 +285,8 @@ int main (int argc, char *argv[])
 	FILE *f = NULL;
 	int count;
 	int records = 0;
+
+	log_init ("/dev/pts/6");
 
 	//if (argc != 2) { exit (1); }
 	f = fopen (argv[1], "r");
