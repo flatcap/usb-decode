@@ -25,6 +25,8 @@ int main (int argc, char *argv[])
 	if (libusb_kernel_driver_active (handle, iface) == 0) {
 		if (libusb_attach_kernel_driver (handle, iface) == 0) {
 			printf ("kernel driver attached\n");
+		} else {
+			printf ("ERROR: libusb_attach_kernel_driver\n");
 		}
 	} else {
 		printf ("kernel driver was already attached\n");

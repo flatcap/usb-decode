@@ -25,6 +25,8 @@ int main (int argc, char *argv[])
 	if (libusb_kernel_driver_active (handle, iface) == 1) {
 		if (libusb_detach_kernel_driver (handle, iface) == 0) {
 			printf ("kernel driver detached\n");
+		} else {
+			printf ("ERROR: libusb_detach_kernel_driver\n");
 		}
 	} else {
 		printf ("kernel driver was already detached\n");
