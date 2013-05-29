@@ -313,7 +313,7 @@ int main (int argc, char *argv[])
 	if (f == NULL) { exit (1); }
 
 	while (!feof (f)) {
-		memset (buffer, 'R', sizeof (buffer));
+		memset (buffer, 0xdd, sizeof (buffer));
 		count = fread (&usb, 1, 48, f);
 		//printf ("header %d bytes\n", count);
 		if (count < 48) {
@@ -377,7 +377,7 @@ int main (int argc, char *argv[])
 
 				if (buffer[15] >= 0xD0) {
 					log_debug ("Vendor: %02x\n", buffer[15]);
-					memset (collected, 0xfd, sizeof (collected));
+					memset (collected, 0xdd, sizeof (collected));
 					want = (buffer[19]<<8) + buffer[20];	// XXX Big-endian
 					done = 0;
 					//log_info ("Want %d bytes (0x%04x)\n", want, want);

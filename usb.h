@@ -20,3 +20,31 @@ typedef struct usb_dd {
 	uint8_t  bNumConfigurations; // 17 Number of possible configurations. Typically 01h.
 } usb_device_descriptor;
 
+
+#if 0
+
+/**
+ * Section 5.1: Command Block Wrapper (CBW)
+ */
+struct command_block_wrapper {
+	uint8_t dCBWSignature[4];	// 0x00
+	uint32_t dCBWTag;		// 0x04
+	uint32_t dCBWDataTransferLength;// 0x08
+	uint8_t bmCBWFlags;		// 0x0C
+	uint8_t bCBWLUN;		// 0x0D
+	uint8_t bCBWCBLength;		// 0x0E
+	uint8_t CBWCB[16];		// 0x0F
+}  __attribute__((__packed__));
+
+/**
+ * Section 5.2: Command Status Wrapper (CSW)
+ */
+struct command_status_wrapper {
+	uint8_t dCSWSignature[4];	// 0x00
+	uint32_t dCSWTag;		// 0x04
+	uint32_t dCSWDataResidue;	// 0x08
+	uint8_t bCSWStatus;		// 0x0C
+}  __attribute__((__packed__));
+
+#endif
+
