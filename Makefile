@@ -20,5 +20,5 @@ all: $(PROGS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(PROGS)
+	rm -f $(PROGS) tags
 

@@ -1,8 +1,5 @@
-activity.bin
 attach
 bulk
-d1.pcap
-d?.txt
 detach
 dump
 ioctl
