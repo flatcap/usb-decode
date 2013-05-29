@@ -422,9 +422,37 @@ int main (int argc, char *argv[])
 					//log_info ("done = %d, want = %d\n", done, want);
 
 					if (want <= 0) {
-						wfilename (collected + 4);
-						log_info ("%02x %02x %02x %02x\n", collected[0], collected[1], collected[2], collected[3]);
+						long size = 0;
+						char *type = NULL;
+						int disk = 0;
+
+						if (done == 0x238) {	// VENDOR 0xDA
+							switch (collected[0x230]) {
+								case 0x10: type = "Dir";     break;
+								case 0x20: type = "File";    break;
+								default:   type = "Unknown"; break;
+							}
+
+							disk = collected[0] & 0x0F;
+							log_info ("Disk: %d\n", disk);
+
+							log_info ("%s: ", type);
+							wfilename (collected + 4);
+
+							size = (collected[0x210]) + (collected[0x211]<<8) + (collected[0x212]<<16) + (collected[0x213]<<24);
+							printf ("Size: %ld\n", size);
+						} else if (done == 0x20C) {	// VENDOR 0xDB
+							disk = collected[0] & 0x0F;
+							log_info ("Disk: %d\n", disk);
+
+							log_info ("Listing: ");
+							wfilename (collected + 4);
+						} else {
+							log_info ("Unknown: ");
+							wfilename (collected + 4);
+						}
 						//log_hex (collected + 0x210, 0, done - 0x210);
+						log_info ("%02x %02x %02x %02x\n", collected[0], collected[1], collected[2], collected[3]);
 						log_hex (collected, 0, done);
 					}
 				} else {
