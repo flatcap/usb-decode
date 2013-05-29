@@ -449,6 +449,9 @@ int main (int argc, char *argv[])
 
 							log_info ("Listing: ");
 							wfilename (collected + 4);
+						} else if (done == 0x2800) {	// VENDOR 0xDA status
+							log_info ("Status:\n");
+							wfilename (collected + 4);
 						} else {
 							log_info ("Unknown: ");
 							wfilename (collected + 4);
