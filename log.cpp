@@ -48,6 +48,59 @@ static int _log (const char *format, va_list args)
 
 
 /**
+ * log_hex
+ */
+void log_hex (void *buf, int start, int length)
+{
+	int off, i, s, e;
+	unsigned char *mem = buf;
+	unsigned char last[16];
+	int same = 0;
+
+	s =  start                & ~15;	// round down
+	e = (start + length + 15) & ~15;	// round up
+
+	for (off = s; off < e; off += 16) {
+
+		if (memcmp ((char*)buf+off, last, sizeof (last)) == 0) {
+			if (!same) {
+				fprintf (file, "	        ...\n");
+				same = 1;
+			}
+			continue;
+		} else {
+			same = 0;
+			memcpy (last, (char*)buf+off, sizeof (last));
+		}
+
+		if (off == s)
+			fprintf (file, "	%6.6x ", start);
+		else
+			fprintf (file, "	%6.6x ", off);
+
+		for (i = 0; i < 16; i++) {
+			if (i == 8)
+				fprintf (file, " -");
+			if (((off+i) >= start) && ((off+i) < (start+length)))
+				fprintf (file, " %02X", mem[off+i]);
+			else
+				fprintf (file, "   ");
+		}
+		fprintf (file, "  ");
+		for (i = 0; i < 16; i++) {
+			if (((off+i) < start) || ((off+i) >= (start+length)))
+				fprintf (file, " ");
+			else if (isprint(mem[off + i]))
+				fprintf (file, "%c", mem[off + i]);
+			else
+				fprintf (file, ".");
+		}
+		fprintf (file, "\n");
+	}
+	fflush (file);
+}
+
+/**
  * log_debug
  */
 __attribute__ ((format (printf, 1, 2)))
@@ -102,9 +155,9 @@ int log_info (const char *format, ...)
 		return 0;
 
 	va_start (args, format);
-	fprintf (file, "\e[38;5;79m");
+	//fprintf (file, "\e[38;5;79m");
 	retval = _log (format, args);
-	fprintf (file, "\e[0m");
+	//fprintf (file, "\e[0m");
 	va_end (args);
 
 	return retval;

@@ -38,6 +38,7 @@
 int log_info  (const char *format, ...) __attribute__ ((format (printf, 1, 2)));
 int log_error (const char *format, ...) __attribute__ ((format (printf, 1, 2)));
 int log_debug (const char *format, ...) __attribute__ ((format (printf, 1, 2)));
+void log_hex (void *buf, int start, int length);
 
 bool log_init (const char *name);
 void log_close (void);

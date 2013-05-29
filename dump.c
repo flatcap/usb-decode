@@ -93,11 +93,10 @@ static void dump_hex (void *buf, int start, int length)
 /**
  * dump_usb
  */
-static void dump_usb (u8 *data)
+static void dump_usb (struct usbmon_packet *u)
 {
 	char time_buf[64];
 	struct tm *tm = NULL;
-	struct usbmon_packet *u = (struct usbmon_packet *) data;
 	char *type;
 	char *xfer;
 	char *setup;
@@ -215,6 +214,22 @@ static void dump_usb (u8 *data)
 
 
 /**
+ * wfilename
+ */
+static void wfilename (u8 *data)
+{
+	int i;
+
+	for (i = 0; i < 64; i++) {
+		if (!data[2*i])
+			break;
+		log_info ("%c", data[2*i]);
+	}
+	log_info ("\n");
+}
+
+
+/**
  * display_usb_device_descriptor
  */
 static bool display_usb_device_descriptor (struct usbmon_packet *usb, u8 *data)
@@ -285,6 +300,9 @@ int main (int argc, char *argv[])
 	FILE *f = NULL;
 	int count;
 	int records = 0;
+	int done = 0;
+	int want = 0;
+	u8 collected[1024];
 
 	log_init ("/dev/pts/6");
 
@@ -301,7 +319,7 @@ int main (int argc, char *argv[])
 				break;
 			exit (1);
 		}
-		dump_usb ((u8 *)&usb);
+		dump_usb (&usb);
 		//printf ("\n");
 
 		//usb.length = 4 * ((usb.length + 3) / 4); // Round up
@@ -355,6 +373,13 @@ int main (int argc, char *argv[])
 				printf ("	bCBWCBLength: %d\n",                        buffer[14]);
 				printf ("	CBWCB:\n");
 
+				if (buffer[15] >= 0xD0) {
+					log_debug ("Vendor: %02x\n", buffer[15]);
+					memset (collected, 0xfd, sizeof (collected));
+					want = (buffer[19]<<8) + buffer[20];	// XXX Big-endian
+					done = 0;
+					//log_info ("Want %d bytes (0x%04x)\n", want, want);
+				}
 				printf ("		Operation code: 0x%02x %s\n", buffer[15], op);
 				if (buffer[15] < 0xC0) {
 					printf ("		LUN: %d\n", buffer[16]>>5);
@@ -390,7 +415,21 @@ int main (int argc, char *argv[])
 			} else if (display_usb_device_descriptor (&usb, buffer)) {
 				// nothing
 			} else {
-				dump_hex (buffer, 0, usb.len_cap);
+				if (want > 0) {
+					memcpy (collected + done, buffer, usb.len_cap);
+					want -= usb.len_cap;
+					done += usb.len_cap;
+					//log_info ("done = %d, want = %d\n", done, want);
+
+					if (want <= 0) {
+						wfilename (collected + 4);
+						log_info ("%02x %02x %02x %02x\n", collected[0], collected[1], collected[2], collected[3]);
+						//log_hex (collected + 0x210, 0, done - 0x210);
+						log_hex (collected, 0, done);
+					}
+				} else {
+					dump_hex (buffer, 0, usb.len_cap);
+				}
 			}
 			printf ("\n");
 		}
