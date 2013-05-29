@@ -12,7 +12,7 @@ const bool false = 0;
 #include "usb.h"
 #include "log.h"
 
-#include "log.cpp"
+#include "log.c"
 
 typedef unsigned char      u8;
 typedef unsigned short     u16;
