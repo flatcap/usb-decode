@@ -304,11 +304,13 @@ int main (int argc, char *argv[])
 	int want = 0;
 	u8 collected[1024];
 
-	log_init ("/dev/pts/6");
+	log_init ("/dev/pts/3");
 
-	//if (argc != 2) { exit (1); }
-	f = fopen (argv[1], "r");
-	//if (f == NULL) { exit (1); }
+	if (argc == 2)
+		f = fopen (argv[1], "r");
+	else
+		f = fopen ("/dev/usbmon3", "r");
+	if (f == NULL) { exit (1); }
 
 	while (!feof (f)) {
 		memset (buffer, 'R', sizeof (buffer));
