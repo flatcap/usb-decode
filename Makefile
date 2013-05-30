@@ -14,11 +14,16 @@ CFLAGS += -g
 CFLAGS	+= $(shell pkg-config --cflags $(PACKAGES))
 LDFLAGS += $(shell pkg-config --libs   $(PACKAGES))
 
-all: $(PROGS)
+all: tags $(PROGS)
 
 .c.o:
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
 	rm -f $(PROGS) tags
+
+tags:	phony
+	ctags dump.c usb.h usbtypes.h
+
+phony:
 

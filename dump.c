@@ -2,54 +2,309 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
-#include <stdint.h>
 #include <time.h>
 
-typedef unsigned char      bool;
-const bool true  = 1;
-const bool false = 0;
-
 #include "usb.h"
-#include "log.h"
 
+#if 0
 #include "log.c"
-
-typedef unsigned char      u8;
-typedef unsigned short     u16;
-typedef unsigned int       u32;
-typedef unsigned long long u64;
-
-typedef   signed char      s8;
-typedef   signed short     s16;
-typedef   signed int       s32;
-typedef   signed long long s64;
-
-const char *dir = "out";
+#else
+#define log_init(...)	/*nothing*/
+#define log_info	printf
+#define log_debug	printf
+#define log_hex		dump_hex
+#endif
 
 /**
- * struct usbmon_packet
+ * valid_cdb_6
  */
-struct usbmon_packet
+static bool valid_cdb_6 (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
 {
-	u64 id;			/*  0: URB ID - from submission to callback */
-	u8 type;		/*  8: Same as text; extensible. */
-	u8 xfer_type;		/*  9: ISO (0), Intr, Control, Bulk (3) */
-	u8 epnum;		/* 10: Endpoint number and transfer direction */
-	u8 devnum;		/* 11: Device address */
-	u16 busnum;		/* 12: Bus number */
-	char flag_setup;	/* 14: Same as text */
-	char flag_data;		/* 15: Same as text; Binary zero is OK. */
-	s64 ts_sec;		/* 16: gettimeofday */
-	s32 ts_usec;		/* 24: gettimeofday */
-	int status;		/* 28: */
-	u32 length;		/* 32: Length of data (submitted or actual) */
-	u32 len_cap;		/* 36: Delivered length */
-	u8 setup[8];		/* 40: Only for Control S-type */
-	int interval;		/* 48: Only for Interrupt and ISO */
-	int start_frame;	/* 52: For ISO */
-	u32 xfer_flags;		/* 56: copy of URB's transfer_flags */
-	u32 ndesc;		/* 60: Actual number of ISO descriptors */
-};				/* 64 total length */
+	if (!u || !cbw || !buffer)
+		return false;
+
+	if (cbw->bCBWCBLength != 6)
+		return false;
+
+	switch (buffer[0]) {
+		case 0x00:		// TEST UNIT READY
+			if ((buffer[1] & 0x1f) != 0)			// reserved
+				return false;
+			if (buffer[2] || buffer[3] || buffer[4])	// reserved
+				return false;
+
+			// XXX how do I check buffer[5] "Control"?
+			return true;
+		case 0x03:		// REQUEST SENSE
+			if ((buffer[1] & 0x1f) != 0)			// reserved
+				return false;
+			if (buffer[2] || buffer[3])			// reserved
+				return false;
+			// XXX how do I check buffer[4] "Allocation length"?
+			// XXX how do I check buffer[5] "Control"?
+			return true;
+		case 0x1a:		// MODE SENSE (6)
+			// XXX how do I check this?
+			return true;
+		case 0x1e:		// PREVENT ALLOW MEDIUM REMOVAL
+			// XXX how do I check this?
+			return true;
+		default:
+			return false;
+	}
+}
+
+/**
+ * valid_cdb_10
+ */
+static bool valid_cdb_10 (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
+{
+	if (!u || !cbw || !buffer)
+		return false;
+
+	if (cbw->bCBWCBLength != 10)
+		return false;
+
+	switch (buffer[0]) {
+		case 0x25:		// READ CAPACITY(10)
+			// XXX
+			return true;
+		case 0x28:		// READ(10)
+			// XXX
+			return true;
+		default:
+			return false;
+	}
+}
+
+/**
+ * valid_cdb_vendor
+ */
+static bool valid_cdb_vendor (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
+{
+	if (!u || !cbw || !buffer)
+		return false;
+
+	if (cbw->bCBWCBLength != 7)
+		return false;
+
+	switch (buffer[0]) {
+		case 0xda:		// Vendor 1
+			return true;
+		case 0xdb:		// Vendor 2
+			return true;
+		default:
+			return false;
+	}
+}
+
+
+/**
+ * valid_cdb
+ */
+static bool valid_cdb (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
+{
+	if (!u || !cbw || !buffer)
+		return false;
+
+	if (buffer[0] < 0x20)
+		return valid_cdb_6 (u, cbw, buffer);
+	else if (buffer[0] < 0x60)
+		return valid_cdb_10 (u, cbw, buffer);
+	else if ((buffer[0] == 0xda) || (buffer[0] == 0xdb))
+		return valid_cdb_vendor (u, cbw, buffer);
+
+	// Other commands exist, but we don't use them
+	return false;
+}
+
+/**
+ * valid_cbw
+ */
+static bool valid_cbw (usbmon_packet *u, u8 *buffer)
+{
+	// These fields could contain any value:
+	//	dCBWTag, dCBWDataTransferLength
+
+	command_block_wrapper *cbw = NULL;
+
+	if (!u || !buffer)
+		return false;
+
+	cbw = (command_block_wrapper *) buffer;
+
+	if (u->len_cap != sizeof (command_block_wrapper))
+		return false;
+
+	if (strncmp (cbw->dCBWSignature, "USBC", 4) != 0)
+		return false;
+
+	if ((cbw->bmCBWFlags != 0) && (cbw->bmCBWFlags != 0x80))
+		return false;
+
+	if (cbw->bCBWLUN > 15)
+		return false;
+
+	if ((cbw->bCBWCBLength < 6) || (cbw->bCBWCBLength > 16))
+		return false;
+
+	if (!valid_cdb (u, cbw, cbw->CBWCB))
+		return false;
+
+	return true;
+}
+
+/**
+ * valid_csw
+ */
+static bool valid_csw (usbmon_packet *u, u8 *buffer)
+{
+	command_status_wrapper *csw = NULL;
+
+	if (!u || !buffer)
+		return false;
+
+	csw = (command_status_wrapper *) buffer;
+
+	if (u->len_cap != sizeof (command_status_wrapper))
+		return false;
+
+	if (strncmp (csw->dCSWSignature, "USBS", 4) != 0)
+		return false;
+
+	//XXX how do I validate these?:
+	//dCSWTag;		// 0x04
+	//dCSWDataResidue;	// 0x08
+	//bCSWStatus;		// 0x0C
+
+	return true;
+}
+
+/**
+ * valid_dd
+ */
+static bool valid_dd (usbmon_packet *usb, u8 *data)
+{
+	if (usb->epnum != 0x80)		// Inbound traffic
+		return false;
+
+	if (usb->len_cap != 18)		// Data length
+		return false;
+
+	if (data[0] != 18)		// Descriptor length
+		return false;
+
+	if (data[1] != 1)		// Descriptor type
+		return false;
+
+	usb_device_descriptor *dd = (usb_device_descriptor*) data;
+
+	printf ("Device Descriptor\n");
+	printf ("	bLength            : %d\n",     dd->bLength);
+	printf ("	bDescriptorType    : %d\n",     dd->bDescriptorType);
+	printf ("	bcdUSB             : 0x%04x\n", dd->bcdUSB);
+	printf ("	bDeviceClass       : %d\n",     dd->bDeviceClass);
+	printf ("	bDeviceSubClass    : %d\n",     dd->bDeviceSubclass);
+	printf ("	bDeviceProtocol    : %d\n",     dd->bDeviceProtocol);
+	printf ("	bMaxPacketSize0    : %d\n",     dd->bMaxPacketSize0);
+	printf ("	idVendor           : 0x%04x\n", dd->idVendor);
+	printf ("	idProduct          : 0x%04x\n", dd->idProduct);
+	printf ("	bcdDevice          : %d\n",     dd->bcdDevice);
+	printf ("	iManufacturer      : %d\n",     dd->iManufacturer);
+	printf ("	iProduct           : %d\n",     dd->iProduct);
+	printf ("	iSerialNumber      : %d\n",     dd->iSerialNumber);
+	printf ("	bNumConfigurations : %d\n",     dd->bNumConfigurations);
+
+	return true;
+}
+
+/**
+ * valid_req_sense
+ */
+static bool valid_req_sense (usbmon_packet *u, u8 *buffer)
+{
+	if (!u || !buffer)
+		return false;
+
+	return true;
+}
+
+/**
+ * valid_usbmon
+ */
+static bool valid_usbmon (usbmon_packet *u)
+{
+	if (!u)
+		return false;
+
+	if ((u->id & 0xffffff0000000000) != 0xffff880000000000)
+		return false;
+
+	// type: submit, complete
+	if ((u->type != 'S') && (u->type != 'C'))
+		return false;
+
+	// transfer type: iso, intr, control, bulk
+	if (u->xfer_type > 3)
+		return false;
+
+	// endpoint number
+	if ((u->epnum & 0x7f) > 2)
+		return false;
+
+	// device number -- incremented each time the device is un-/re-plugged
+	if (u->devnum > 0x80)
+		return false;
+
+	// bus number, seems to be stable
+	if (u->busnum != 3)
+		return false;
+
+	// setup section: present, not present
+	if ((u->flag_setup != 0) && (u->flag_setup != '-'))
+		return false;
+
+	// data: present, not present, not present
+	if ((u->flag_data != 0) && (u->flag_data != '<') && (u->flag_data != '>'))
+		return false;
+
+	// one year window
+	if ((u->ts_sec < 1338380174) || (u->ts_sec > 1401452171))
+		return false;
+
+	// microseconds
+	if (u->ts_usec > 1000000)
+		return false;
+
+	// success, broken pipe, in progress
+	if ((u->status != 0) && (u->status != -32) && (u->status != -115))
+		return false;
+
+	if (u->length > 64)		// XXX validate this against the device descriptor
+		return false;
+
+	if (u->len_cap > 64)
+		return false;
+
+	// Transfer Type: Control (2)
+	// Type: Submit ('S')
+	// Setup: Relevant (0)
+	if ((u->xfer_type == 2) && (u->type == 'S') && (u->flag_setup == 0)) {
+		usbmon_setup *setup = (usbmon_setup *) u->setup;
+
+		// bitfield
+		if (((setup->bmRequestType >> 5) & 0x03) == 3)
+			return false;
+		if ((setup->bmRequestType & 0x1f) > 3)
+			return false;
+
+		// Request: Standard, Class, Vendor
+		if (setup->bRequest > 2)
+			return false;
+
+	}
+	return true;
+}
 
 
 /**
@@ -91,9 +346,173 @@ static void dump_hex (void *buf, int start, int length)
 }
 
 /**
- * dump_usb
+ * dump_string
  */
-static void dump_usb (struct usbmon_packet *u)
+static void dump_string (u8 *data)
+{
+	int i;
+
+	for (i = 0; i < 64; i++) {
+		if (!data[2*i])
+			break;
+		log_info ("%c", data[2*i]);
+	}
+	log_info ("\n");
+}
+
+
+/**
+ * dump_cbw
+ */
+static void dump_cbw (u8 *buffer)
+{
+	command_block_wrapper *cbw = NULL;
+	char *op;
+	char *direction;
+
+	if (!buffer)
+		return;
+
+	cbw = (command_block_wrapper *) buffer;
+
+	switch (buffer[15]) {
+		case 0x00: op = "TEST UNIT READY";              break;
+		case 0x03: op = "REQUEST SENSE";                break;
+		case 0x12: op = "INQUIRY";                      break;
+		case 0x1A: op = "MODE SENSE (6)";               break;
+		case 0x1E: op = "PREVENT ALLOW MEDIUM REMOVAL"; break;
+		case 0x23: op = "READ FORMAT CAPACITIES";       break;
+		case 0x25: op = "READ CAPACITY(10)";            break;
+		case 0x28: op = "READ(10)";                     break;
+		case 0xDA: op = "VENDOR";                       break;
+		case 0xDB: op = "VENDOR";                       break;
+		default:   op = "UNKNOWN";
+	}
+
+	switch (cbw->bmCBWFlags) {
+		case 0x00: direction = "host to device"; break;
+		case 0x80: direction = "device to host"; break;
+		default:   direction = "UNKNOWN";
+	}
+
+	printf ("Command Block Wrapper (CBW), 31 bytes\n");
+	printf ("	dCSWSignature: %.4s\n",                     buffer+0);
+	printf ("	dCSWTag: 0x%04x\n",                *(u32 *)(buffer+4));
+	printf ("	dCBWDataTransferLength: 0x%04x\n", *(u32 *)(buffer+8));
+	printf ("	bmCBWFlags: 0x%02x %s\n",                   buffer[12], direction);
+	printf ("	bCBWLUN: %d\n",                             buffer[13]);
+	printf ("	bCBWCBLength: %d\n",                        buffer[14]);
+	printf ("	CBWCB:\n");
+
+	if (buffer[15] >= 0xD0) {
+		log_debug ("Vendor: %02x\n", buffer[15]);
+		//log_info ("Want %d bytes (0x%04x)\n", want, want);
+	}
+	printf ("		Operation code: 0x%02x %s\n", buffer[15], op);
+	if (buffer[15] < 0xC0) {
+		printf ("		LUN: %d\n", buffer[16]>>5);
+		printf ("		Reserved 1: %d\n", buffer[16] & 0x1F);
+		printf ("		Reserved 2: %d\n", buffer[17]);
+		printf ("		Reserved 3: %d\n", buffer[18]);
+		printf ("		Allocation length: %d\n", buffer[19]);
+		printf ("		Control: %d\n", buffer[20]);
+	} else {
+		dump_hex (buffer+15, 0, 16);
+	}
+}
+
+/**
+ * dump_csw
+ */
+static void dump_csw (u8 *buffer)
+{
+	command_status_wrapper *csw = NULL;
+
+	if (!buffer)
+		return;
+
+	csw = (command_status_wrapper *) buffer;
+
+	printf ("	Command Status Wrapper (CSW), 13 bytes\n");
+	printf ("		dCSWSignature: %.4s\n",     csw->dCSWSignature);
+	printf ("		dCSWTag: 0x%04x\n",         csw->dCSWTag);
+	printf ("		dCSWDataResidue: 0x%04x\n", csw->dCSWDataResidue);
+	printf ("		dCSWStatus: %d\n",          csw->bCSWStatus);
+	// status
+	//	0	ok
+	//	1	failed -> send "GetSense" immediately
+	//	2	phase error
+}
+
+/**
+ * dump_dd
+ */
+static bool dump_dd (usbmon_packet *usb, u8 *data)
+{
+	if (usb->epnum != 0x80)		// Inbound traffic
+		return false;
+
+	if (usb->len_cap != 18)		// Data length
+		return false;
+
+	if (data[0] != 18)		// Descriptor length
+		return false;
+
+	if (data[1] != 1)		// Descriptor type
+		return false;
+
+	usb_device_descriptor *dd = (usb_device_descriptor*) data;
+
+	printf ("Device Descriptor\n");
+	printf ("	bLength            : %d\n",     dd->bLength);
+	printf ("	bDescriptorType    : %d\n",     dd->bDescriptorType);
+	printf ("	bcdUSB             : 0x%04x\n", dd->bcdUSB);
+	printf ("	bDeviceClass       : %d\n",     dd->bDeviceClass);
+	printf ("	bDeviceSubClass    : %d\n",     dd->bDeviceSubclass);
+	printf ("	bDeviceProtocol    : %d\n",     dd->bDeviceProtocol);
+	printf ("	bMaxPacketSize0    : %d\n",     dd->bMaxPacketSize0);
+	printf ("	idVendor           : 0x%04x\n", dd->idVendor);
+	printf ("	idProduct          : 0x%04x\n", dd->idProduct);
+	printf ("	bcdDevice          : %d\n",     dd->bcdDevice);
+	printf ("	iManufacturer      : %d\n",     dd->iManufacturer);
+	printf ("	iProduct           : %d\n",     dd->iProduct);
+	printf ("	iSerialNumber      : %d\n",     dd->iSerialNumber);
+	printf ("	bNumConfigurations : %d\n",     dd->bNumConfigurations);
+
+	return true;
+}
+
+/**
+ * dump_req_sense
+ */
+static void dump_req_sense (u8 *buffer)
+{
+	printf ("Request Sense Response\n");
+	printf ("	Valid: %d\n", buffer[0] >> 7);
+	printf ("	Response Code: %d\n", buffer[0] & 0x7f);
+	printf ("	Obsolete: %d\n", buffer[1]);
+	printf ("	Filemark: %d\n", (buffer[2] & 0x80) >> 7);
+	printf ("	EOM: %d\n", (buffer[2] & 0x40) >> 6);
+	printf ("	ILI: %d\n", (buffer[2] & 0x20) >> 5);
+	printf ("	Reserved: %d\n", (buffer[2] & 0x10) >> 4);
+	printf ("	Sense Key: %d\n", buffer[2] & 0x0F);
+	// Information dependent on (buffer[0] >> 7)
+	printf ("	Information: %02x %02x %02x %02x\n", buffer[3], buffer[4], buffer[5], buffer[6]);
+	printf ("	Additional sense length: %d\n", buffer[7]);
+	printf ("	Command-specific information: %02x %02x %02x %02x\n", buffer[8], buffer[9], buffer[10], buffer[11]);
+	printf ("	Additional sense code: 0x%02x\n", buffer[12]);
+	printf ("	Additional sense code qualifier: %d\n", buffer[13]);
+	printf ("	Field replaceable unit code qualifier: %d\n", buffer[14]);
+	printf ("	SKSV: %d\n", buffer[15] >> 7);
+	printf ("	Sense key specfic 1: %d\n", buffer[15] & 0x7F);
+	printf ("	Sense key specfic 2: %d\n", buffer[16]);
+	printf ("	Sense key specfic 3: %d\n", buffer[17]);
+}
+
+/**
+ * dump_usbmon
+ */
+static void dump_usbmon (usbmon_packet *u)
 {
 	char time_buf[64];
 	struct tm *tm = NULL;
@@ -102,6 +521,9 @@ static void dump_usb (struct usbmon_packet *u)
 	char *setup;
 	char *present;
 	char *status;
+
+	if (!u)
+		return;
 
 	if (0 && !u->len_cap)
 		return;
@@ -214,271 +636,131 @@ static void dump_usb (struct usbmon_packet *u)
 
 
 /**
- * wfilename
+ * listen
  */
-static void wfilename (u8 *data)
+static void listen (FILE *f)
 {
-	int i;
+	u8 buffer[128];
+	usbmon_packet usb;
+	int count;
+	int done = 0;
+	int want = 0;
+	u8 collected[1024];
 
-	for (i = 0; i < 64; i++) {
-		if (!data[2*i])
-			break;
-		log_info ("%c", data[2*i]);
+	while (!feof (f)) {
+		memset (buffer, 0xdd, sizeof (buffer));
+
+		count = fread (&usb, 1, 48, f);
+		if (count < 48) {
+			if (count == 0 && feof (f))
+				break;
+			exit (1);
+		}
+
+		if (valid_usbmon (&usb)) {
+			dump_usbmon (&usb);
+		}
+
+		if (usb.len_cap) {
+			count = fread (buffer, 1, usb.len_cap, f);
+
+			if (valid_csw (&usb, buffer)) {
+				dump_csw (buffer);
+				continue;
+			}
+
+			if (valid_cbw (&usb, buffer)) {
+				dump_cbw (buffer);
+
+				want = (buffer[19]<<8) + buffer[20];	// XXX Big-endian
+				done = 0;
+				continue;
+			}
+
+			if (valid_req_sense (&usb, buffer)) {
+				dump_req_sense (buffer);
+				continue;
+			}
+
+			if (valid_dd (&usb, buffer)) {
+				dump_dd (&usb, buffer);
+				continue;
+			}
+
+			if (want > 0) {
+				memcpy (collected + done, buffer, usb.len_cap);
+				want -= usb.len_cap;
+				done += usb.len_cap;
+				//log_info ("done = %d, want = %d\n", done, want);
+
+				if (want <= 0) {
+					long size = 0;
+					char *type = NULL;
+					int disk = 0;
+
+					if (done == 0x238) {	// VENDOR 0xDA
+						switch (collected[0x230]) {
+							case 0x10: type = "Dir";     break;
+							case 0x20: type = "File";    break;
+							default:   type = "Unknown"; break;
+						}
+
+						disk = collected[0] & 0x0F;
+						log_info ("Disk: %d\n", disk);
+
+						log_info ("%s: ", type);
+						dump_string (collected + 4);
+
+						size = (collected[0x210]) + (collected[0x211]<<8) + (collected[0x212]<<16) + (collected[0x213]<<24);
+						printf ("Size: %ld\n", size);
+					} else if (done == 0x20C) {	// VENDOR 0xDB
+						disk = collected[0] & 0x0F;
+						log_info ("Disk: %d\n", disk);
+
+						log_info ("Listing: ");
+						dump_string (collected + 4);
+					} else if (done == 0x2800) {	// VENDOR 0xDA status
+						log_info ("Status:\n");
+						dump_string (collected + 4);
+					} else {
+						log_info ("Unknown: ");
+						dump_string (collected + 4);
+					}
+					//log_hex (collected + 0x210, 0, done - 0x210);
+					log_info ("%02x %02x %02x %02x\n", collected[0], collected[1], collected[2], collected[3]);
+					log_hex (collected, 0, done);
+				}
+			} else {
+				dump_hex (buffer, 0, usb.len_cap);
+			}
+		}
 	}
-	log_info ("\n");
+
 }
 
-
-/**
- * display_usb_device_descriptor
- */
-static bool display_usb_device_descriptor (struct usbmon_packet *usb, u8 *data)
-{
-	if (usb->epnum != 0x80)		// Inbound traffic
-		return false;
-
-	if (usb->len_cap != 18)		// Data length
-		return false;
-
-	if (data[0] != 18)		// Descriptor length
-		return false;
-
-	if (data[1] != 1)		// Descriptor type
-		return false;
-
-	usb_device_descriptor *dd = (usb_device_descriptor*) data;
-
-	printf ("Device Descriptor\n");
-	printf ("	bLength            : %d\n",     dd->bLength);
-	printf ("	bDescriptorType    : %d\n",     dd->bDescriptorType);
-	printf ("	bcdUSB             : 0x%04x\n", dd->bcdUSB);
-	printf ("	bDeviceClass       : %d\n",     dd->bDeviceClass);
-	printf ("	bDeviceSubClass    : %d\n",     dd->bDeviceSubclass);
-	printf ("	bDeviceProtocol    : %d\n",     dd->bDeviceProtocol);
-	printf ("	bMaxPacketSize0    : %d\n",     dd->bMaxPacketSize0);
-	printf ("	idVendor           : 0x%04x\n", dd->idVendor);
-	printf ("	idProduct          : 0x%04x\n", dd->idProduct);
-	printf ("	bcdDevice          : %d\n",     dd->bcdDevice);
-	printf ("	iManufacturer      : %d\n",     dd->iManufacturer);
-	printf ("	iProduct           : %d\n",     dd->iProduct);
-	printf ("	iSerialNumber      : %d\n",     dd->iSerialNumber);
-	printf ("	bNumConfigurations : %d\n",     dd->bNumConfigurations);
-
-	return true;
-}
-
-
-#if 0
-/**
- * file_append
- */
-static int file_append (char *name, u8 *data, int length)
-{
-	char filename[128];
-	FILE *f = NULL;
-
-	sprintf (filename, "%s/%s", dir, name);
-
-	f = fopen (filename, "a+");
-	if (!f) {
-		perror ("fopen");
-		exit (1);
-	}
-
-	return 0;
-}
-
-#endif
 
 /**
  * main
  */
 int main (int argc, char *argv[])
 {
-	u8 buffer[128];
-	struct usbmon_packet usb;
 	FILE *f = NULL;
-	int count;
-	int records = 0;
-	int done = 0;
-	int want = 0;
-	u8 collected[1024];
 
 	log_init ("/dev/pts/3");
 
-	if (argc == 2)
+	if (argc == 2) {
 		f = fopen (argv[1], "r");
-	else
+	} else {
 		f = fopen ("/dev/usbmon3", "r");
-	if (f == NULL) { exit (1); }
-
-	while (!feof (f)) {
-		memset (buffer, 0xdd, sizeof (buffer));
-		count = fread (&usb, 1, 48, f);
-		//printf ("header %d bytes\n", count);
-		if (count < 48) {
-			if (count == 0 && feof (f))
-				break;
-			exit (1);
-		}
-		dump_usb (&usb);
-		//printf ("\n");
-
-		//usb.length = 4 * ((usb.length + 3) / 4); // Round up
-		//usb.len_cap = 4 * ((usb.len_cap + 3) / 4); // Round up
-		//printf ("length = %d\n", usb.length);
-		//printf ("len_cap = %d\n", usb.len_cap);
-
-		if (usb.len_cap) {
-			count = fread (buffer, 1, usb.len_cap, f);
-			//printf ("read %d bytes\n", count);
-			if ((usb.len_cap == 13) && (buffer[0] == 'U') && (buffer[1] == 'S') && (buffer[2] == 'B') && (buffer[3] == 'S')) {
-				printf ("	Command Status Wrapper (CSW), 13 bytes\n");
-				printf ("		dCSWSignature: %.4s\n",              buffer+0);
-				printf ("		dCSWTag: 0x%04x\n",         *(u32 *)(buffer+4));
-				printf ("		dCSWDataResidue: 0x%04x\n", *(u32 *)(buffer+8));
-				printf ("		dCSWStatus: %d\n",                   buffer[12]);
-				// status
-				//	0	ok
-				//	1	failed -> send "GetSense" immediately
-				//	2	phase error
-			} else if ((usb.len_cap == 31) && (buffer[0] == 'U') && (buffer[1] == 'S') && (buffer[2] == 'B') && (buffer[3] == 'C')) {
-				char *op;
-				char *direction;
-
-				switch (buffer[15]) {
-					case 0x00: op = "TEST UNIT READY";              break;
-					case 0x03: op = "REQUEST SENSE";                break;
-					case 0x12: op = "INQUIRY";                      break;
-					case 0x1A: op = "MODE SENSE (6)";               break;
-					case 0x1E: op = "PREVENT ALLOW MEDIUM REMOVAL"; break;
-					case 0x23: op = "READ FORMAT CAPACITIES";       break;
-					case 0x25: op = "READ CAPACITY(10)";            break;
-					case 0x28: op = "READ(10)";                     break;
-					case 0xDA: op = "VENDOR";                       break;
-					case 0xDB: op = "VENDOR";                       break;
-					default:   op = "UNKNOWN";
-				}
-
-				switch (buffer[12]) {
-					case 0x00: direction = "host to device"; break;
-					case 0x80: direction = "device to host"; break;
-					default:   direction = "UNKNOWN";
-				}
-
-				printf ("Command Block Wrapper (CBW), 31 bytes\n");
-				printf ("	dCSWSignature: %.4s\n",                     buffer+0);
-				printf ("	dCSWTag: 0x%04x\n",                *(u32 *)(buffer+4));
-				printf ("	dCBWDataTransferLength: 0x%04x\n", *(u32 *)(buffer+8));
-				printf ("	bmCBWFlags: 0x%02x %s\n",                   buffer[12], direction);
-				printf ("	bCBWLUN: %d\n",                             buffer[13]);
-				printf ("	bCBWCBLength: %d\n",                        buffer[14]);
-				printf ("	CBWCB:\n");
-
-				if (buffer[15] >= 0xD0) {
-					log_debug ("Vendor: %02x\n", buffer[15]);
-					memset (collected, 0xdd, sizeof (collected));
-					want = (buffer[19]<<8) + buffer[20];	// XXX Big-endian
-					done = 0;
-					//log_info ("Want %d bytes (0x%04x)\n", want, want);
-				}
-				printf ("		Operation code: 0x%02x %s\n", buffer[15], op);
-				if (buffer[15] < 0xC0) {
-					printf ("		LUN: %d\n", buffer[16]>>5);
-					printf ("		Reserved 1: %d\n", buffer[16] & 0x1F);
-					printf ("		Reserved 2: %d\n", buffer[17]);
-					printf ("		Reserved 3: %d\n", buffer[18]);
-					printf ("		Allocation length: %d\n", buffer[19]);
-					printf ("		Control: %d\n", buffer[20]);
-				} else {
-					dump_hex (buffer+15, 0, 16);
-				}
-			} else if (buffer[0] == 0x70) {
-				printf ("Request Sense Response\n");
-				printf ("	Valid: %d\n", buffer[0] >> 7);
-				printf ("	Response Code: %d\n", buffer[0] & 0x7f);
-				printf ("	Obsolete: %d\n", buffer[1]);
-				printf ("	Filemark: %d\n", (buffer[2] & 0x80) >> 7);
-				printf ("	EOM: %d\n", (buffer[2] & 0x40) >> 6);
-				printf ("	ILI: %d\n", (buffer[2] & 0x20) >> 5);
-				printf ("	Reserved: %d\n", (buffer[2] & 0x10) >> 4);
-				printf ("	Sense Key: %d\n", buffer[2] & 0x0F);
-				// Information dependent on (buffer[0] >> 7)
-				printf ("	Information: %02x %02x %02x %02x\n", buffer[3], buffer[4], buffer[5], buffer[6]);
-				printf ("	Additional sense length: %d\n", buffer[7]);
-				printf ("	Command-specific information: %02x %02x %02x %02x\n", buffer[8], buffer[9], buffer[10], buffer[11]);
-				printf ("	Additional sense code: 0x%02x\n", buffer[12]);
-				printf ("	Additional sense code qualifier: %d\n", buffer[13]);
-				printf ("	Field replaceable unit code qualifier: %d\n", buffer[14]);
-				printf ("	SKSV: %d\n", buffer[15] >> 7);
-				printf ("	Sense key specfic 1: %d\n", buffer[15] & 0x7F);
-				printf ("	Sense key specfic 2: %d\n", buffer[16]);
-				printf ("	Sense key specfic 3: %d\n", buffer[17]);
-			} else if (display_usb_device_descriptor (&usb, buffer)) {
-				// nothing
-			} else {
-				if (want > 0) {
-					memcpy (collected + done, buffer, usb.len_cap);
-					want -= usb.len_cap;
-					done += usb.len_cap;
-					//log_info ("done = %d, want = %d\n", done, want);
-
-					if (want <= 0) {
-						long size = 0;
-						char *type = NULL;
-						int disk = 0;
-
-						if (done == 0x238) {	// VENDOR 0xDA
-							switch (collected[0x230]) {
-								case 0x10: type = "Dir";     break;
-								case 0x20: type = "File";    break;
-								default:   type = "Unknown"; break;
-							}
-
-							disk = collected[0] & 0x0F;
-							log_info ("Disk: %d\n", disk);
-
-							log_info ("%s: ", type);
-							wfilename (collected + 4);
-
-							size = (collected[0x210]) + (collected[0x211]<<8) + (collected[0x212]<<16) + (collected[0x213]<<24);
-							printf ("Size: %ld\n", size);
-						} else if (done == 0x20C) {	// VENDOR 0xDB
-							disk = collected[0] & 0x0F;
-							log_info ("Disk: %d\n", disk);
-
-							log_info ("Listing: ");
-							wfilename (collected + 4);
-						} else if (done == 0x2800) {	// VENDOR 0xDA status
-							log_info ("Status:\n");
-							wfilename (collected + 4);
-						} else {
-							log_info ("Unknown: ");
-							wfilename (collected + 4);
-						}
-						//log_hex (collected + 0x210, 0, done - 0x210);
-						log_info ("%02x %02x %02x %02x\n", collected[0], collected[1], collected[2], collected[3]);
-						log_hex (collected, 0, done);
-					}
-				} else {
-					dump_hex (buffer, 0, usb.len_cap);
-				}
-			}
-			printf ("\n");
-		}
-
-		//printf ("\n");
-		records++;
-		//if (records == 2) break;
 	}
 
-	//count = fread (buffer, 1, 128, f);
-	//printf ("\n");
-	//dump_hex (buffer, 0, 128);
-	//printf ("\n");
+	if (f == NULL) {
+		printf ("fopen\n");
+		exit (1);
+	}
 
+	listen (f);
 	fclose (f);
-	//printf ("EOF\n");
 	return 0;
 }
 
