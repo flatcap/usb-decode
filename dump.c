@@ -688,7 +688,7 @@ static void dump_usbmon (usbmon_packet *u)
 #else
 	tm = localtime ((time_t*)&u->ts_sec);
 	strftime (time_buf, sizeof (time_buf), "%Y-%m-%d %H:%M:%S", tm);
-	//printf ("URB Time: %s.%d\n", time_buf, u->ts_usec);
+	//printf ("URB Time: %s.%06d\n", time_buf, u->ts_usec);
 #endif
 	printf ("URB status: %s (%d)\n", status, u->status);
 	printf ("URB length: %d\n", u->length);
