@@ -386,6 +386,7 @@ static bool valid_req_sense (usbmon_packet *u, u8 *buffer)
 	if (!u || !buffer)
 		RETURN (false);
 
+	return false;
 	return true;
 }
 
@@ -591,6 +592,9 @@ static bool dump_dd (usbmon_packet *usb, u8 *data)
  */
 static void dump_req_sense (u8 *buffer)
 {
+	if (!buffer)
+		return;
+
 	printf ("Request Sense Response\n");
 	printf ("	Valid: %d\n", buffer[0] >> 7);
 	printf ("	Response Code: %d\n", buffer[0] & 0x7f);
@@ -627,9 +631,6 @@ static void dump_usbmon (usbmon_packet *u)
 	char *status;
 
 	if (!u)
-		return;
-
-	if (0 && !u->len_cap)
 		return;
 
 	switch (u->type) {
