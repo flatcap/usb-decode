@@ -678,8 +678,8 @@ static void dump_usbmon (usbmon_packet *u)
 	printf ("Endpoint: 0x%02x\n", u->epnum);
 	printf ("	Direction: %s\n", (u->epnum & 0x80) ? "IN" : "OUT");
 	printf ("	Endpoint: %d\n", (u->epnum & 0x7f));
-	printf ("Device: %d\n", u->devnum);
-	printf ("URB bus id: %d\n", u->busnum);
+	//printf ("Device: %d\n", u->devnum);
+	//printf ("URB bus id: %d\n", u->busnum);
 	printf ("Device setup request: %s\n", setup);
 	printf ("Data: %s\n", present);
 #if 0
@@ -688,7 +688,7 @@ static void dump_usbmon (usbmon_packet *u)
 #else
 	tm = localtime ((time_t*)&u->ts_sec);
 	strftime (time_buf, sizeof (time_buf), "%Y-%m-%d %H:%M:%S", tm);
-	printf ("URB Time: %s.%d\n", time_buf, u->ts_usec);
+	//printf ("URB Time: %s.%d\n", time_buf, u->ts_usec);
 #endif
 	printf ("URB status: %s (%d)\n", status, u->status);
 	printf ("URB length: %d\n", u->length);
@@ -762,82 +762,87 @@ static void listen (FILE *f)
 			exit (1);
 		}
 
-		if (valid_usbmon (&usb)) {
-			dump_usbmon (&usb);
+		if (!valid_usbmon (&usb)) {
+			printf ("XXX invalid usbmon packet\n");
+			break;
 		}
 
-		if (usb.len_cap) {
-			count = fread (buffer, 1, usb.len_cap, f);
+		dump_usbmon (&usb);
 
-			if (valid_dd (&usb, buffer)) {
-				dump_dd (&usb, buffer);
-				continue;
-			}
+		if (!usb.len_cap)
+			continue;
 
-			if (valid_csw (&usb, buffer)) {
-				dump_csw (buffer);
-				continue;
-			}
+		count = fread (buffer, 1, usb.len_cap, f);
+		dump_hex (buffer, 0, usb.len_cap);
 
-			if (valid_cbw (&usb, buffer)) {
-				dump_cbw (buffer);
+		if (valid_dd (&usb, buffer)) {
+			dump_dd (&usb, buffer);
+			continue;
+		}
 
-				want = (buffer[19]<<8) + buffer[20];	// XXX Big-endian
-				done = 0;
-				continue;
-			}
+		if (valid_csw (&usb, buffer)) {
+			dump_csw (buffer);
+			continue;
+		}
 
-			if (valid_req_sense (&usb, buffer)) {
-				dump_req_sense (buffer);
-				continue;
-			}
+		if (valid_cbw (&usb, buffer)) {
+			dump_cbw (buffer);
 
-			if (want > 0) {
-				memcpy (collected + done, buffer, usb.len_cap);
-				want -= usb.len_cap;
-				done += usb.len_cap;
-				//log_info ("done = %d, want = %d\n", done, want);
+			want = (buffer[19]<<8) + buffer[20];	// XXX Big-endian
+			done = 0;
+			continue;
+		}
 
-				if (want <= 0) {
-					long size = 0;
-					char *type = NULL;
-					int disk = 0;
+		if (valid_req_sense (&usb, buffer)) {
+			dump_req_sense (buffer);
+			continue;
+		}
 
-					if (done == 0x238) {	// VENDOR 0xDA
-						switch (collected[0x230]) {
-							case 0x10: type = "Dir";     break;
-							case 0x20: type = "File";    break;
-							default:   type = "Unknown"; break;
-						}
+		if (want > 0) {
+			memcpy (collected + done, buffer, usb.len_cap);
+			want -= usb.len_cap;
+			done += usb.len_cap;
+			//log_info ("done = %d, want = %d\n", done, want);
 
-						disk = collected[0] & 0x0F;
-						log_info ("Disk: %d\n", disk);
+			if (want <= 0) {
+				long size = 0;
+				char *type = NULL;
+				int disk = 0;
 
-						log_info ("%s: ", type);
-						dump_string (collected + 4);
-
-						size = (collected[0x210]) + (collected[0x211]<<8) + (collected[0x212]<<16) + (collected[0x213]<<24);
-						printf ("Size: %ld\n", size);
-					} else if (done == 0x20C) {	// VENDOR 0xDB
-						disk = collected[0] & 0x0F;
-						log_info ("Disk: %d\n", disk);
-
-						log_info ("Listing: ");
-						dump_string (collected + 4);
-					} else if (done == 0x2800) {	// VENDOR 0xDA status
-						log_info ("Status:\n");
-						dump_string (collected + 4);
-					} else {
-						log_info ("Unknown: ");
-						dump_string (collected + 4);
+				if (done == 0x238) {	// VENDOR 0xDA
+					switch (collected[0x230]) {
+						case 0x10: type = "Dir";     break;
+						case 0x20: type = "File";    break;
+						default:   type = "Unknown"; break;
 					}
-					//log_hex (collected + 0x210, 0, done - 0x210);
-					log_info ("%02x %02x %02x %02x\n", collected[0], collected[1], collected[2], collected[3]);
-					log_hex (collected, 0, done);
+
+					disk = collected[0] & 0x0F;
+					log_info ("Disk: %d\n", disk);
+
+					log_info ("%s: ", type);
+					dump_string (collected + 4);
+
+					size = (collected[0x210]) + (collected[0x211]<<8) + (collected[0x212]<<16) + (collected[0x213]<<24);
+					printf ("Size: %ld\n", size);
+				} else if (done == 0x20C) {	// VENDOR 0xDB
+					disk = collected[0] & 0x0F;
+					log_info ("Disk: %d\n", disk);
+
+					log_info ("Listing: ");
+					dump_string (collected + 4);
+				} else if (done == 0x2800) {	// VENDOR 0xDA status
+					log_info ("Status:\n");
+					dump_string (collected + 4);
+				} else {
+					log_info ("Unknown: ");
+					dump_string (collected + 4);
 				}
-			} else {
-				dump_hex (buffer, 0, usb.len_cap);
+				//log_hex (collected + 0x210, 0, done - 0x210);
+				log_info ("%02x %02x %02x %02x\n", collected[0], collected[1], collected[2], collected[3]);
+				log_hex (collected, 0, done);
 			}
+		} else {
+			dump_hex (buffer, 0, usb.len_cap);
 		}
 	}
 
