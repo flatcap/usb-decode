@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 
 #include "usb.h"
 
@@ -331,34 +332,48 @@ static bool valid_csw (usbmon_packet *u, u8 *buffer)
 static bool valid_dd (usbmon_packet *usb, u8 *data)
 {
 	if (usb->epnum != 0x80)		// Inbound traffic
-		RETURN (false);
+		return (false);
 
 	if (usb->len_cap != 18)		// Data length
-		RETURN (false);
-
-	if (data[0] != 18)		// Descriptor length
-		RETURN (false);
-
-	if (data[1] != 1)		// Descriptor type
-		RETURN (false);
+		return (false);
 
 	usb_device_descriptor *dd = (usb_device_descriptor*) data;
 
-	printf ("Device Descriptor\n");
-	printf ("	bLength            : %d\n",     dd->bLength);
-	printf ("	bDescriptorType    : %d\n",     dd->bDescriptorType);
-	printf ("	bcdUSB             : 0x%04x\n", dd->bcdUSB);
-	printf ("	bDeviceClass       : %d\n",     dd->bDeviceClass);
-	printf ("	bDeviceSubClass    : %d\n",     dd->bDeviceSubclass);
-	printf ("	bDeviceProtocol    : %d\n",     dd->bDeviceProtocol);
-	printf ("	bMaxPacketSize0    : %d\n",     dd->bMaxPacketSize0);
-	printf ("	idVendor           : 0x%04x\n", dd->idVendor);
-	printf ("	idProduct          : 0x%04x\n", dd->idProduct);
-	printf ("	bcdDevice          : %d\n",     dd->bcdDevice);
-	printf ("	iManufacturer      : %d\n",     dd->iManufacturer);
-	printf ("	iProduct           : %d\n",     dd->iProduct);
-	printf ("	iSerialNumber      : %d\n",     dd->iSerialNumber);
-	printf ("	bNumConfigurations : %d\n",     dd->bNumConfigurations);
+	if (dd->bDescriptorType != 1)
+		return (false);
+
+	if (dd->bLength != 18)
+		return (false);
+
+	if (dd->bcdUSB != 0x200)	// USB 2.0
+		return (false);
+
+	if (dd->bDeviceClass || dd->bDeviceSubclass || dd->bDeviceProtocol)
+		return false;
+
+	if (dd->bMaxPacketSize0 != 8)
+		return false;
+
+	if (dd->idVendor != 0x1bb4)
+		return false;
+
+	if (dd->idProduct != 0x0010)
+		return false;
+
+	if (dd->bcdDevice)
+		return false;
+
+	if (dd->iManufacturer != 1)
+		return false;
+
+	if (dd->iProduct != 2)
+		return false;
+
+	if (dd->iSerialNumber)
+		return false;
+
+	if (dd->bNumConfigurations != 1)
+		return false;
 
 	return true;
 }
@@ -421,13 +436,16 @@ static bool valid_usbmon (usbmon_packet *u)
 	if (u->ts_usec > 1000000)
 		RETURN (false);
 
-	// success, broken pipe, in progress
-	if ((u->status != 0) && (u->status != -32) && (u->status != -115))
+	// XXX probably ought to quit on ENOENT
+	// success, -2, -32, -115
+	if ((u->status != 0) && (u->status != -ENOENT) && (u->status != -EPIPE) && (u->status != -EINPROGRESS)) {
+		printf ("XXX status = %d\n", u->status);
 		RETURN (false);
+	}
 
 	if (u->length > 64) {		// XXX validate this against the device descriptor
 		printf ("XXX length = %d\n", u->length);
-		RETURN (false);
+		//RETURN (false);
 	}
 
 	if (u->len_cap > 64)
@@ -544,17 +562,8 @@ static void dump_csw (u8 *buffer)
  */
 static bool dump_dd (usbmon_packet *usb, u8 *data)
 {
-	if (usb->epnum != 0x80)		// Inbound traffic
-		RETURN (false);
-
-	if (usb->len_cap != 18)		// Data length
-		RETURN (false);
-
-	if (data[0] != 18)		// Descriptor length
-		RETURN (false);
-
-	if (data[1] != 1)		// Descriptor type
-		RETURN (false);
+	if (!usb || !data)
+		return (false);
 
 	usb_device_descriptor *dd = (usb_device_descriptor*) data;
 
@@ -759,6 +768,11 @@ static void listen (FILE *f)
 		if (usb.len_cap) {
 			count = fread (buffer, 1, usb.len_cap, f);
 
+			if (valid_dd (&usb, buffer)) {
+				dump_dd (&usb, buffer);
+				continue;
+			}
+
 			if (valid_csw (&usb, buffer)) {
 				dump_csw (buffer);
 				continue;
@@ -774,11 +788,6 @@ static void listen (FILE *f)
 
 			if (valid_req_sense (&usb, buffer)) {
 				dump_req_sense (buffer);
-				continue;
-			}
-
-			if (valid_dd (&usb, buffer)) {
-				dump_dd (&usb, buffer);
 				continue;
 			}
 
