@@ -38,6 +38,9 @@
 int error_count = 0;
 int error_max   = 0;
 
+#define RETURN(retval)	{ log_error ("\e[31mTest failed: %s(%d)\e[0m\n", __FUNCTION__, __LINE__); error_count++; if (error_count > error_max) exit (1); return retval; }
+#define CONTINUE	{ log_error ("\e[31mTest failed: %s(%d)\e[0m\n", __FUNCTION__, __LINE__); error_count++; if (error_count > error_max) exit (1); continue; }
+
 /**
  * enum fsm
  */
@@ -57,19 +60,12 @@ struct current_state {
 	enum fsm waiting_for;
 	int      command;
 	int      tag;
-	int      xfer_len;
-	int      urb_len;
-	int      data_len;
+	u32      xfer_len;
+	u32      urb_len;
+	u32      data_len;
+	u32      done;
 };
 
-
-struct current_state current;
-
-usbmon_packet cmd_send;
-usbmon_packet cmd_recv;
-
-#define RETURN(retval)	{ log_error ("\e[31mTest failed: %s(%d)\e[0m\n", __FUNCTION__, __LINE__); error_count++; if (error_count > error_max) exit (1); return retval; }
-#define CONTINUE	{ log_error ("\e[31mTest failed: %s(%d)\e[0m\n", __FUNCTION__, __LINE__); error_count++; if (error_count > error_max) exit (1); continue; }
 
 /**
  * dump_hex
@@ -79,10 +75,24 @@ static void dump_hex (void *buf, int start, int length)
 	int off, i, s, e;
 	u8 *mem = buf;
 
+	unsigned char last[16];
+	int same = 0;
 	s =  start                & ~15;	// round down
 	e = (start + length + 15) & ~15;	// round up
 
 	for (off = s; off < e; off += 16) {
+
+		if (memcmp ((char*)buf+off, last, sizeof (last)) == 0) {
+			if (!same) {
+				printf ("	        ...\n");
+				same = 1;
+			}
+			continue;
+		} else {
+			same = 0;
+			memcpy (last, (char*)buf+off, sizeof (last));
+		}
+
 		if (off == s)
 			printf("	%6.6x ", start);
 		else
@@ -109,6 +119,7 @@ static void dump_hex (void *buf, int start, int length)
 	}
 }
 
+#if 0
 /**
  * dump_string
  */
@@ -124,35 +135,142 @@ static void dump_string (u8 *data)
 	log_info ("\n");
 }
 
+#endif
+
+/**
+ * scsi_dump_sense
+ */
+static bool scsi_dump_sense (u8 *buffer, int size)
+{
+	const char *sense = NULL;
+
+	/*
+	printf ("\n");
+	printf ("\tValid: %d\n", buffer[0]>>7);
+	printf ("\tError code: 0x%02x\n", buffer[0]&0x7F);
+
+	printf ("\tSense key: 0x%02x\n", buffer[2]&0x0F);
+	if (buffer[7] == 0x0A) {
+		printf ("\tAdditional sense: %d\n", buffer[12]);
+		printf ("\tSense qualifier: %d\n", buffer[13]);
+	}
+	*/
+
+	switch (((buffer[2]&0x0F)<<16) + (buffer[12] << 8) + buffer[13]) {
+		case 0x000000: sense = "NO SENSE";                                          break;
+		case 0x011701: sense = "RECOVERED DATA WITH RETRIES";                       break;
+		case 0x011800: sense = "RECOVERED DATA WITH ECC";                           break;
+		case 0x020401: sense = "LOGICAL DRIVE NOT READY - BECOMING READY";          break;
+		case 0x020402: sense = "LOGICAL DRIVE NOT READY - INITIALIZATION REQUIRED"; break;
+		case 0x020404: sense = "LOGICAL UNIT NOT READY - FORMAT IN PROGRESS";       break;
+		case 0x0204FF: sense = "LOGICAL DRIVE NOT READY - DEVICE IS BUSY";          break;
+		case 0x020600: sense = "NO REFERENCE POSITION FOUND";                       break;
+		case 0x020800: sense = "LOGICAL UNIT COMMUNICATION FAILURE";                break;
+		case 0x020801: sense = "LOGICAL UNIT COMMUNICATION TIME-OUT";               break;
+		case 0x020880: sense = "LOGICAL UNIT COMMUNICATION OVERRUN";                break;
+		case 0x023A00: sense = "MEDIUM NOT PRESENT";                                break;
+		case 0x025400: sense = "USB TO HOST SYSTEM INTERFACE FAILURE";              break;
+		case 0x028000: sense = "INSUFFICIENT RESOURCES";                            break;
+		case 0x02FFFF: sense = "UNKNOWN ERROR";                                     break;
+		case 0x030200: sense = "NO SEEK COMPLETE";                                  break;
+		case 0x030300: sense = "WRITE FAULT";                                       break;
+		case 0x031000: sense = "ID CRC ERROR";                                      break;
+		case 0x031100: sense = "UNRECOVERED READ ERROR";                            break;
+		case 0x031200: sense = "ADDRESS MARK NOT FOUND FOR ID FIELD";               break;
+		case 0x031300: sense = "ADDRESS MARK NOT FOUND FOR DATA FIELD";             break;
+		case 0x031400: sense = "RECORDED ENTITY NOT FOUND";                         break;
+		case 0x033001: sense = "CANNOT READ MEDIUM - UNKNOWN FORMAT";               break;
+		case 0x033101: sense = "FORMAT COMMAND FAILED";                             break;
+		//case 0x0440NN: sense = "DIAGNOSTIC FAILURE ON COMPONENT NN (80H-FFH)";      break;
+		case 0x051A00: sense = "PARAMETER LIST LENGTH ERROR";                       break;
+		case 0x052000: sense = "INVALID COMMAND OPERATION CODE";                    break;
+		case 0x052100: sense = "LOGICAL BLOCK ADDRESS OUT OF RANGE";                break;
+		case 0x052400: sense = "INVALID FIELD IN COMMAND PACKET";                   break;
+		case 0x052500: sense = "LOGICAL UNIT NOT SUPPORTED";                        break;
+		case 0x052600: sense = "INVALID FIELD IN PARAMETER LIST";                   break;
+		case 0x052601: sense = "PARAMETER NOT SUPPORTED";                           break;
+		case 0x052602: sense = "PARAMETER VALUE INVALID";                           break;
+		case 0x053900: sense = "SAVING PARAMETERS NOT SUPPORT";                     break;
+		case 0x062800: sense = "NOT READY TO READY TRANSITION - MEDIA CHANGED";     break;
+		case 0x062900: sense = "POWER ON RESET OR BUS DEVICE RESET OCCURRED";       break;
+		case 0x062F00: sense = "COMMANDS CLEARED BY ANOTHER INITIATOR";             break;
+		case 0x072700: sense = "WRITE PROTECTED MEDIA";                             break;
+		case 0x0B4E00: sense = "OVERLAPPED COMMAND ATTEMPTED";                      break;
+		default:       sense = "UNKNOWN";                                           break;
+	}
+
+	printf (" (%s)", sense);
+
+	return true;
+}
 
 /**
  * dump_scsi
+ *
+ * can we display the info succinctly?
  */
-static void dump_scsi (int command, u8 *buffer, int size)
+static bool dump_scsi (int command, u8 *buffer, int size)
 {
+	int i;
+
 	switch (command) {
 		case 0x00:		// TEST UNIT READY
-			printf ("TEST UNIT READY: %s", (buffer[12] == 0) ? "GOOD" : "FAILED");
-			break;
+			// no data
+			return true;
 		case 0x03:		// REQUEST SENSE
-			break;
+			return scsi_dump_sense (buffer, size);
 		case 0x12:		// INQUIRY
 			break;
 		case 0x1a:		// MODE SENSE (6)
-			break;
+			for (i = 4; i < size; i++) {
+				if (buffer[i])
+					return false;
+			}
+
+			if ((buffer[0] != 0) || (buffer[1] != 6))
+				return false;
+
+			printf (" (drive %s)", (buffer[3] & 0x80) ? "ro" : "rw");
+			return true;
 		case 0x1e:		// PREVENT ALLOW MEDIUM REMOVAL
 			break;
 		case 0x23:		// READ FORMAT CAPACITIES
 			break;
 		case 0x25:		// READ CAPACITY(10)
-			printf ("READ CAPACITY: %d x %d bytes", be32_to_cpup (buffer+0), be32_to_cpup (buffer+4));
-			break;
+			printf (" (%dx%d bytes)", be32_to_cpup (buffer+0), be32_to_cpup (buffer+4));
+			return true;
 		case 0x28:		// READ(10)
-			break;
+			for (i = 0; i < size; i++) {
+				if (buffer[i])
+					return false;
+			}
+			printf (" (%d zeros)", size);
+			return true;
 		default:
-			printf ("XXX unknown command");
 			dump_hex (buffer, 0, size);
 			break;
+	}
+
+	return false;
+}
+
+/**
+ * scsi_get_command
+ */
+static const char *scsi_get_command (u8 id)
+{
+	switch (id) {
+		case 0x00: return "TEST UNIT      ";
+		case 0x03: return "REQ SENSE      ";
+		case 0x12: return "INQUIRY        ";
+		case 0x1a: return "MODE SENSE     ";
+		case 0x1e: return "PREVENT REMOVAL";
+		case 0x23: return "READ FORMAT    ";
+		case 0x25: return "READ CAPACITY  ";
+		case 0x28: return "READ           ";
+		case 0xda: return "Vendor 1       ";
+		case 0xdb: return "Vendor 2       ";
+		default:   return "UNKNOWN        ";
 	}
 }
 
@@ -372,6 +490,7 @@ static int valid_cbw (usbmon_packet *u, u8 *buffer)
 	return (valid_cdb (u, cbw, cbw->CBWCB));
 }
 
+#if 0
 /**
  * valid_csw
  */
@@ -464,6 +583,7 @@ static bool valid_req_sense (usbmon_packet *u, u8 *buffer)
 	return true;
 }
 
+#endif
 /**
  * valid_usbmon
  */
@@ -549,6 +669,7 @@ static bool valid_usbmon (usbmon_packet *u)
 }
 
 
+#if 0
 /**
  * dump_cbw
  */
@@ -906,6 +1027,7 @@ static void dump_usbmon (usbmon_packet *u)
 	}
 }
 
+#endif
 
 /**
  * listen
@@ -915,18 +1037,10 @@ static void listen (FILE *f)
 	u8 buffer[128];
 	usbmon_packet usb;
 	int count;
-	int done = 0;
-	int want = 0;
-	u8 collected[1024];
+	u8 *collected = NULL;
 	int command = -1;
-	char output_usb[128];
-
-	current.waiting_for = send;
-	current.command     = -1;
-	current.tag         = -1;
-	current.data_len    = -1;
-	current.urb_len     = -1;
-	current.data_len    = -1;
+	//char output_usb[128];
+	struct current_state current = { send, 0, 0, 0, 0, 0, 0 };
 
 	while (!feof (f)) {
 		memset (buffer, 0xdd, sizeof (buffer));
@@ -955,25 +1069,36 @@ static void listen (FILE *f)
 
 		switch (current.waiting_for) {
 			case send:
-				if (usb.type != 'S')
+				if (usb.type != 'S') {
 					CONTINUE;
+				}
 
 				command = valid_cbw (&usb, buffer);
 				if (command < 0) {
 					printf ("XXX FSM(%d)\n", __LINE__);
-					continue;
+					dump_hex (&usb, 0, 48);
+					CONTINUE;
 				}
+
+				if (usb.length != usb.len_cap)
+					CONTINUE;
 
 				current.command  = command;
 				current.urb_len  = usb.length;
 				current.data_len = usb.len_cap;
-				current.tag      = be32_to_cpup (buffer+4);
-				current.xfer_len = be32_to_cpup (buffer+8);
+				current.tag      = *(u32 *)(buffer+4);
+				current.xfer_len = *(u32 *)(buffer+8);
+				current.done = 0;
+				if (current.xfer_len) {
+					collected = calloc (1, current.xfer_len);
+					if (!collected)
+						CONTINUE;
+					memset (collected, 0xdd, current.xfer_len);	//XXX temporary
+				}
 
-				printf ("SCSI 0x%02x SEND", current.command);
+				//printf ("SCSI 0x%02x %s SEND", current.command, scsi_get_command(current.command));
+				printf ("SCSI 0x%02x %s S", current.command, scsi_get_command(current.command));
 
-				//want = (buffer[19]<<8) + buffer[20];	// XXX Big-endian
-				//done = 0;
 				current.waiting_for = send_ack;
 				continue;
 			case send_ack:
@@ -981,35 +1106,56 @@ static void listen (FILE *f)
 					CONTINUE;
 				if (current.urb_len != usb.length)
 					CONTINUE;
+				if (usb.len_cap != 0)
+					CONTINUE;
 				current.urb_len = -1;
 				current.data_len = -1;
-				printf (" ACK");
-				if (current.xfer_len)
+				//printf (" ACK");
+				printf ("✓");
+				if (current.xfer_len) {
 					current.waiting_for = recv;
-				else
+				} else {
 					current.waiting_for = rcpt;
+				}
 				continue;
 			case recv:
 				if (usb.type != 'S')
 					CONTINUE;
+				if (usb.length == 0)
+					CONTINUE;
+				if (usb.len_cap != 0)
+					CONTINUE;
 				current.urb_len  = usb.length;
 				current.data_len = usb.len_cap;
-				printf (" RECV");
+				//printf (" RECV");
+				printf ("R");
 				current.waiting_for = recv_ack;
 				continue;
 			case recv_ack:
 				if (usb.type != 'C')
 					CONTINUE;
+				if (usb.length != usb.len_cap)
+					CONTINUE;
 				if (current.urb_len != usb.length)
 					CONTINUE;
-				printf (" ACK: ");
-				dump_scsi (current.command, buffer, usb.length);
-				current.waiting_for = rcpt;
+
+				//printf (" ACK ");
+				printf ("✓");
+				memcpy (collected+current.done, buffer, usb.len_cap);
+				current.done += usb.len_cap;
+				if (current.done >= current.xfer_len) {
+					// We've got all the data, now
+					current.waiting_for = rcpt;
+				} else {
+					// We want more data
+					current.waiting_for = recv;
+				}
 				continue;
 			case rcpt:
 				if (usb.type != 'S')
 					CONTINUE;
-				printf (" : RCPT");
+				//printf (" RCPT");
+				printf ("X");
 				current.urb_len  = usb.length;
 				current.data_len = usb.len_cap;
 				current.waiting_for = rcpt_ack;
@@ -1019,16 +1165,27 @@ static void listen (FILE *f)
 					CONTINUE;
 				if (current.urb_len != usb.length)
 					CONTINUE;
-				current.command  = -1;
-				current.urb_len  = -1;
-				current.data_len = -1;
-				printf (" ACK");
-				printf ("\n");
+				//printf (" ACK");
+				printf ("✓");
+				printf (" (%s)", (buffer[12] == 0) ? "SUCCESS" : "FAILURE");
+				if (dump_scsi (current.command, collected, current.xfer_len)) {
+					//data is processed
+					printf ("\n");
+				} else {
+					printf ("\n");
+					dump_hex (collected, 0, current.xfer_len);
+				}
+				current.command  = 0;
+				current.urb_len  = 0;
+				current.data_len = 0;
+				current.done     = 0;
+				current.tag      = 0;
 				current.waiting_for = send;
 				continue;
 		}
 
 		continue;
+#if 0
 		if (valid_dd (&usb, buffer)) {
 			dump_dd (&usb, buffer);
 			continue;
@@ -1091,6 +1248,7 @@ static void listen (FILE *f)
 		} else {
 			//dump_hex (buffer, 0, usb.len_cap);
 		}
+#endif
 	}
 
 }
