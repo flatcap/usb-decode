@@ -23,6 +23,7 @@
 #include <errno.h>
 
 #include "usb.h"
+#include "endians.h"
 
 #if 0
 #include "log.c"
@@ -37,7 +38,38 @@
 int error_count = 0;
 int error_max   = 0;
 
+/**
+ * enum fsm
+ */
+enum fsm {
+	send,
+	send_ack,
+	recv,
+	recv_ack,
+	rcpt,
+	rcpt_ack
+};
+
+/**
+ * struct current_state
+ */
+struct current_state {
+	enum fsm waiting_for;
+	int      command;
+	int      tag;
+	int      xfer_len;
+	int      urb_len;
+	int      data_len;
+};
+
+
+struct current_state current;
+
+usbmon_packet cmd_send;
+usbmon_packet cmd_recv;
+
 #define RETURN(retval)	{ log_error ("\e[31mTest failed: %s(%d)\e[0m\n", __FUNCTION__, __LINE__); error_count++; if (error_count > error_max) exit (1); return retval; }
+#define CONTINUE	{ log_error ("\e[31mTest failed: %s(%d)\e[0m\n", __FUNCTION__, __LINE__); error_count++; if (error_count > error_max) exit (1); continue; }
 
 /**
  * dump_hex
@@ -94,102 +126,130 @@ static void dump_string (u8 *data)
 
 
 /**
+ * dump_scsi
+ */
+static void dump_scsi (int command, u8 *buffer, int size)
+{
+	switch (command) {
+		case 0x00:		// TEST UNIT READY
+			printf ("TEST UNIT READY: %s", (buffer[12] == 0) ? "GOOD" : "FAILED");
+			break;
+		case 0x03:		// REQUEST SENSE
+			break;
+		case 0x12:		// INQUIRY
+			break;
+		case 0x1a:		// MODE SENSE (6)
+			break;
+		case 0x1e:		// PREVENT ALLOW MEDIUM REMOVAL
+			break;
+		case 0x23:		// READ FORMAT CAPACITIES
+			break;
+		case 0x25:		// READ CAPACITY(10)
+			printf ("READ CAPACITY: %d x %d bytes", be32_to_cpup (buffer+0), be32_to_cpup (buffer+4));
+			break;
+		case 0x28:		// READ(10)
+			break;
+		default:
+			printf ("XXX unknown command");
+			dump_hex (buffer, 0, size);
+			break;
+	}
+}
+
+
+/**
  * valid_cdb_6
  */
-static bool valid_cdb_6 (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
+static int valid_cdb_6 (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
 {
 	unsigned int i;
 
 	if (!u || !cbw || !buffer)
-		RETURN (false);
+		RETURN (-1);
 
 	if ((buffer[0] == 0x00) || (buffer[0] == 0x03) || (buffer[0] == 0x12)) {
-		// Satmap sends 12 bytes; that doesn't match the SCSI spec.
-		if (cbw->bCBWCBLength == 12) {
-			// Satmap sends this excess data, which probably ought to be zero
-			if (buffer[6] || buffer[7] || buffer[8] || buffer[9] || buffer[10] || buffer[11])
-				RETURN (false);
-		} else if (cbw->bCBWCBLength != 6) {
-			RETURN (false);
+		// Satmap sometimes sends 12 bytes; that doesn't match the SCSI spec.
+		if ((cbw->bCBWCBLength != 12) && (cbw->bCBWCBLength != 6)) {
+			printf ("XXX another invalid length: %d\n", cbw->bCBWCBLength);
+			RETURN (-1);
 		}
 	} else {
 		if (cbw->bCBWCBLength != 6) {
-			printf ("XXX command = %#02x, length = %d\n", buffer[0], cbw->bCBWCBLength);
-			RETURN (false);
+			printf ("XXX command = 0x%02x, length = %d\n", buffer[0], cbw->bCBWCBLength);
+			RETURN (-1);
 		}
 	}
 
 	// check that the slack space is empty
-	// XXX this clashes with the Satmap 12 byte check
 	for (i = 6; i < sizeof (cbw->CBWCB); i++) {
 		if (buffer[i])
-			RETURN (false);
+			RETURN (-1);
 	}
 
 	switch (buffer[0]) {
 		case 0x00:		// TEST UNIT READY
 			if ((buffer[1] & 0x1f) != 0)			// reserved
-				RETURN (false);
+				RETURN (-1);
 			if (buffer[2] || buffer[3] || buffer[4])	// reserved
-				RETURN (false);
+				RETURN (-1);
 			if (buffer[5])
-				RETURN (false);
-			return true;
+				RETURN (-1);
+			return buffer[0];
 		case 0x03:		// REQUEST SENSE
 			if ((buffer[1] & 0x1f) != 0)			// reserved
-				RETURN (false);
+				RETURN (-1);
 			if (buffer[2] || buffer[3])			// reserved
-				RETURN (false);
+				RETURN (-1);
 			if (buffer[5])
-				RETURN (false);
+				RETURN (-1);
 			// buffer[4] Allocation length can be any value
-			return true;
+			return buffer[0];
 		case 0x12:		// INQUIRY
 			if (buffer[1] > 1)
-				RETURN (false);
+				RETURN (-1);
 			if ((buffer[2] != 0) && (buffer[2] != 0x80))	// page code: none, vendor
-				RETURN (false)
+				RETURN (-1)
 			if (buffer[5])
-				RETURN (false);
+				RETURN (-1);
 			// buffer[3],buffer[4] Allocation length can be any value
-			return true;
+			return buffer[0];
 		case 0x1a:		// MODE SENSE (6)
 			if (buffer[5])
-				RETURN (false);
+				RETURN (-1);
 			// These fields can be any value:
 			//	buffer[2] Page code
 			//	buffer[3] Subpage code
 			//	buffer[4] Allocation length
-			return true;
+			return buffer[0];
 		case 0x1e:		// PREVENT ALLOW MEDIUM REMOVAL
 			if (buffer[1] || buffer[2] || buffer[3] || buffer[5])
-				RETURN (false);
+				RETURN (-1);
 			if (buffer[4] > 1)
-				RETURN (false);
-			return true;
+				RETURN (-1);
+			return buffer[0];
 		default:
-			printf ("XXX command %#02x\n", buffer[0]);
-			RETURN (false);
+			printf ("XXX command 0x%02x\n", buffer[0]);
+			RETURN (-1);
 	}
 }
 
 /**
  * valid_cdb_10
  */
-static bool valid_cdb_10 (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
+static int valid_cdb_10 (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
 {
 	unsigned int i;
 
 	if (!u || !cbw || !buffer)
-		RETURN (false);
+		RETURN (-1);
 
 	if (cbw->bCBWCBLength != 10)
-		RETURN (false);
+		RETURN (-1);
 
 	// check that the slack space is empty
 	for (i = 10; i < sizeof (cbw->CBWCB); i++) {
 		if (buffer[i])
-			RETURN (false);
+			RETURN (-1);
 	}
 
 	switch (buffer[0]) {
@@ -198,64 +258,64 @@ static bool valid_cdb_10 (usbmon_packet *u, command_block_wrapper *cbw, u8 *buff
 			for (i = 1; i < cbw->bCBWCBLength; i++) {
 				if (i == 8) {
 					if (buffer[i] != 0xFC)
-						RETURN (false);
+						RETURN (-1);
 					continue;
 				}
 				if (buffer[i])
-					RETURN (false);
+					RETURN (-1);
 			}
-			return true;
+			return buffer[0];
 		case 0x25:		// READ CAPACITY(10)
 			// Opcode, then all zeros
 			for (i = 1; i < cbw->bCBWCBLength; i++) {
 				if (buffer[i])
-					RETURN (false);
+					RETURN (-1);
 			}
-			return true;
+			return buffer[0];
 		case 0x28:		// READ(10)
 			// Opcode, then all zeros (except buffer[8] == 1)
 			for (i = 1; i < cbw->bCBWCBLength; i++) {
 				if (i == 8) {
 					if (buffer[i] != 1)
-						RETURN (false);
+						RETURN (-1);
 					continue;
 				}
 				if (buffer[i])
-					RETURN (false);
+					RETURN (-1);
 			}
-			return true;
+			return buffer[0];
 		default:
-			printf ("XXX command = %#02x\n", buffer[0]);
-			RETURN (false);
+			printf ("XXX command = 0x%02x\n", buffer[0]);
+			RETURN (-1);
 	}
 }
 
 /**
  * valid_cdb_vendor
  */
-static bool valid_cdb_vendor (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
+static int valid_cdb_vendor (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
 {
 	unsigned int i;
 
 	if (!u || !cbw || !buffer)
-		RETURN (false);
+		RETURN (-1);
 
 	if (cbw->bCBWCBLength != 7)
-		RETURN (false);
+		RETURN (-1);
 
 	// check that the slack space is empty
 	for (i = 7; i < sizeof (cbw->CBWCB); i++) {
 		if (buffer[i])
-			RETURN (false);
+			RETURN (-1);
 	}
 
 	switch (buffer[0]) {
 		case 0xda:		// Vendor 1
-			return true;
+			return buffer[0];
 		case 0xdb:		// Vendor 2
-			return true;
+			return buffer[0];
 		default:
-			RETURN (false);
+			RETURN (-1);
 	}
 }
 
@@ -263,10 +323,10 @@ static bool valid_cdb_vendor (usbmon_packet *u, command_block_wrapper *cbw, u8 *
 /**
  * valid_cdb
  */
-static bool valid_cdb (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
+static int valid_cdb (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
 {
 	if (!u || !cbw || !buffer)
-		RETURN (false);
+		RETURN (-1);
 
 	if (buffer[0] < 0x20)
 		return valid_cdb_6 (u, cbw, buffer);
@@ -276,13 +336,13 @@ static bool valid_cdb (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
 		return valid_cdb_vendor (u, cbw, buffer);
 
 	// Other commands exist, but we don't use them
-	RETURN (false);
+	RETURN (-1);
 }
 
 /**
  * valid_cbw
  */
-static bool valid_cbw (usbmon_packet *u, u8 *buffer)
+static int valid_cbw (usbmon_packet *u, u8 *buffer)
 {
 	// These fields could contain any value:
 	//	dCBWTag, dCBWDataTransferLength
@@ -290,29 +350,26 @@ static bool valid_cbw (usbmon_packet *u, u8 *buffer)
 	command_block_wrapper *cbw = NULL;
 
 	if (!u || !buffer)
-		RETURN (false);
+		RETURN (-1);
 
 	cbw = (command_block_wrapper *) buffer;
 
 	if (u->len_cap != sizeof (command_block_wrapper))
-		return (false);
+		return (-1);
 
 	if (strncmp (cbw->dCBWSignature, "USBC", 4) != 0)
-		RETURN (false);
+		RETURN (-1);
 
 	if ((cbw->bmCBWFlags != 0) && (cbw->bmCBWFlags != 0x80))
-		RETURN (false);
+		RETURN (-1);
 
 	if (cbw->bCBWLUN > 15)
-		RETURN (false);
+		RETURN (-1);
 
 	if ((cbw->bCBWCBLength < 6) || (cbw->bCBWCBLength > 16))
-		RETURN (false);
+		RETURN (-1);
 
-	if (!valid_cdb (u, cbw, cbw->CBWCB))
-		RETURN (false);
-
-	return true;
+	return (valid_cdb (u, cbw, cbw->CBWCB));
 }
 
 /**
@@ -515,8 +572,8 @@ static void dump_cbw (u8 *buffer)
 		case 0x23: op = "READ FORMAT CAPACITIES";       break;
 		case 0x25: op = "READ CAPACITY(10)";            break;
 		case 0x28: op = "READ(10)";                     break;
-		case 0xDA: op = "VENDOR";                       break;
-		case 0xDB: op = "VENDOR";                       break;
+		case 0xDA: op = "VENDOR 0xDA";                  break;
+		case 0xDB: op = "VENDOR 0xDB";                  break;
 		default:   op = "UNKNOWN";
 	}
 
@@ -526,7 +583,7 @@ static void dump_cbw (u8 *buffer)
 		default:   direction = "UNKNOWN";
 	}
 
-	printf ("Command Block Wrapper (CBW), 31 bytes\n");
+	printf ("Command Block Wrapper (CBW): 31 bytes\n");
 	//printf ("	dCSWSignature: %.4s\n",                     buffer+0);
 	printf ("	dCSWTag: 0x%04x\n",                *(u32 *)(buffer+4));
 	printf ("	dCBWDataTransferLength: 0x%04x\n", *(u32 *)(buffer+8));
@@ -632,6 +689,99 @@ static void dump_req_sense (u8 *buffer)
 	printf ("	Sense key specfic 1: %d\n", buffer[15] & 0x7F);
 	printf ("	Sense key specfic 2: %d\n", buffer[16]);
 	printf ("	Sense key specfic 3: %d\n", buffer[17]);
+}
+
+/**
+ * dump_usbmon_one
+ */
+static void dump_usbmon_one (usbmon_packet *u, char *output)
+{
+	int index = 0;
+	char *xfer;
+	char *setup;
+	char *present;
+	char *status;
+
+	if (!u)
+		return;
+
+	memset (output, 0, sizeof (output));
+
+	switch (u->xfer_type) {
+		case 0:  xfer = "ISO "; break;
+		case 1:  xfer = "Intr"; break;
+		case 2:  xfer = "Ctrl"; break;
+		case 3:  xfer = "Bulk"; break;
+		default: xfer = "XXXX"; break;
+	}
+
+	switch (u->flag_setup) {
+		case 0:   setup = "relevant (0)";       break;
+		case '-': setup = "not relevant ('-')"; break;
+		default:  setup = "Unknown";            break;
+	}
+
+	switch (u->flag_data) {
+		case 0:   present = "present (0)";       break;
+		case '<': present = "not present ('<')"; break;
+		case '>': present = "not present ('>')"; break;
+		default:  present = "Unknown";           break;
+	}
+
+	switch (u->status) {
+		case    0: status = "Success";     break;
+		case  -32: status = "Broken pipe"; break;
+		case -115: status = "In progress"; break;
+		default:   status = "Unknown";     break;
+	}
+
+	index += sprintf (output+index, "%08x ", (u32) u->id);
+	index += sprintf (output+index, "%d:%-2d ", u->busnum, u->devnum);
+	index += sprintf (output+index, "%s ", xfer);
+	index += sprintf (output+index, "%c ", u->type);
+	index += sprintf (output+index, "%-3s ", (u->epnum & 0x80) ? "IN" : "OUT");
+	index += sprintf (output+index, "%d ", (u->epnum & 0x7f));
+	index += sprintf (output+index, "%-11s ", status);
+	index += sprintf (output+index, "U%-2d D%-2d ", u->length, u->len_cap);
+
+	if ((u->xfer_type == 2) && (u->type == 'S') && (u->flag_setup == 0)) {
+		u16 *lang = (u16 *)(u->setup+4);
+		u16 *len  = (u16 *)(u->setup+6);
+		char *rt_direction;
+		char *rt_type;
+		char *rt_recipient;
+
+		switch (u->setup[0] >> 7) {
+			case 0:    rt_direction = "Host to Device"; break;
+			case 1:    rt_direction = "Device to Host"; break;
+			default:   rt_direction = "Unknown";        break;
+		}
+
+		switch ((u->setup[0] >> 5) & 0x03) {
+			case 0:    rt_type = "Standard"; break;
+			case 1:    rt_type = "Class";    break;
+			case 2:    rt_type = "Vendor";   break;
+			default:   rt_type = "Reserved"; break;
+		}
+
+		switch (u->setup[0] & 0x1f) {
+			case 0:    rt_recipient = "Device";    break;
+			case 1:    rt_recipient = "Interface"; break;
+			case 2:    rt_recipient = "Endpoint";  break;
+			case 3:    rt_recipient = "Other";     break;
+			default:   rt_recipient = "Reserved";  break;
+		}
+
+		printf ("	bmRequestType: 0x%02x\n", u->setup[0]);
+		printf ("		Transfer direction: %s\n", rt_direction);
+		printf ("		Type: %s\n", rt_type);
+		printf ("		Recipient: %s\n", rt_recipient);
+		printf ("	bRequest: %d\n",          u->setup[1]);
+		printf ("	Descriptor index: %d\n",  u->setup[2]);
+		printf ("	bDescriptor type: %d\n",  u->setup[3]);
+		printf ("	Language Id: 0x%04x\n",  *lang);
+		printf ("	wLength: %d\n",          *len);
+	}
 }
 
 /**
@@ -768,6 +918,15 @@ static void listen (FILE *f)
 	int done = 0;
 	int want = 0;
 	u8 collected[1024];
+	int command = -1;
+	char output_usb[128];
+
+	current.waiting_for = send;
+	current.command     = -1;
+	current.tag         = -1;
+	current.data_len    = -1;
+	current.urb_len     = -1;
+	current.data_len    = -1;
 
 	while (!feof (f)) {
 		memset (buffer, 0xdd, sizeof (buffer));
@@ -784,14 +943,92 @@ static void listen (FILE *f)
 			break;
 		}
 
-		dump_usbmon (&usb);
+		if (usb.len_cap) {
+			count = fread (buffer, 1, usb.len_cap, f);
+		} else {
+			count = 0;
+		}
 
-		if (!usb.len_cap)
-			continue;
+		//dump_usbmon (&usb);
+		//dump_usbmon_one (&usb, output_usb);
+		//printf ("%s\n", output_usb);
 
-		count = fread (buffer, 1, usb.len_cap, f);
-		dump_hex (buffer, 0, usb.len_cap);
+		switch (current.waiting_for) {
+			case send:
+				if (usb.type != 'S')
+					CONTINUE;
 
+				command = valid_cbw (&usb, buffer);
+				if (command < 0) {
+					printf ("XXX FSM(%d)\n", __LINE__);
+					continue;
+				}
+
+				current.command  = command;
+				current.urb_len  = usb.length;
+				current.data_len = usb.len_cap;
+				current.tag      = be32_to_cpup (buffer+4);
+				current.xfer_len = be32_to_cpup (buffer+8);
+
+				printf ("SCSI 0x%02x SEND", current.command);
+
+				//want = (buffer[19]<<8) + buffer[20];	// XXX Big-endian
+				//done = 0;
+				current.waiting_for = send_ack;
+				continue;
+			case send_ack:
+				if (usb.type != 'C')
+					CONTINUE;
+				if (current.urb_len != usb.length)
+					CONTINUE;
+				current.urb_len = -1;
+				current.data_len = -1;
+				printf (" ACK");
+				if (current.xfer_len)
+					current.waiting_for = recv;
+				else
+					current.waiting_for = rcpt;
+				continue;
+			case recv:
+				if (usb.type != 'S')
+					CONTINUE;
+				current.urb_len  = usb.length;
+				current.data_len = usb.len_cap;
+				printf (" RECV");
+				current.waiting_for = recv_ack;
+				continue;
+			case recv_ack:
+				if (usb.type != 'C')
+					CONTINUE;
+				if (current.urb_len != usb.length)
+					CONTINUE;
+				printf (" ACK: ");
+				dump_scsi (current.command, buffer, usb.length);
+				current.waiting_for = rcpt;
+				continue;
+			case rcpt:
+				if (usb.type != 'S')
+					CONTINUE;
+				printf (" : RCPT");
+				current.urb_len  = usb.length;
+				current.data_len = usb.len_cap;
+				current.waiting_for = rcpt_ack;
+				continue;
+			case rcpt_ack:
+				if (usb.type != 'C')
+					CONTINUE;
+				if (current.urb_len != usb.length)
+					CONTINUE;
+				current.command  = -1;
+				current.urb_len  = -1;
+				current.data_len = -1;
+				printf (" ACK");
+				printf ("\n");
+				current.waiting_for = send;
+				continue;
+		}
+
+		continue;
 		if (valid_dd (&usb, buffer)) {
 			dump_dd (&usb, buffer);
 			continue;
@@ -802,19 +1039,12 @@ static void listen (FILE *f)
 			continue;
 		}
 
-		if (valid_cbw (&usb, buffer)) {
-			dump_cbw (buffer);
-
-			want = (buffer[19]<<8) + buffer[20];	// XXX Big-endian
-			done = 0;
-			continue;
-		}
-
 		if (valid_req_sense (&usb, buffer)) {
 			dump_req_sense (buffer);
 			continue;
 		}
 
+		dump_hex (buffer, 0, usb.len_cap);
 		if (want > 0) {
 			memcpy (collected + done, buffer, usb.len_cap);
 			want -= usb.len_cap;
@@ -859,7 +1089,7 @@ static void listen (FILE *f)
 				log_hex (collected, 0, done);
 			}
 		} else {
-			dump_hex (buffer, 0, usb.len_cap);
+			//dump_hex (buffer, 0, usb.len_cap);
 		}
 	}
 
