@@ -87,7 +87,8 @@ static void dump_hex (void *buf, int start, int length)
 				printf ("	        ...\n");
 				same = 1;
 			}
-			continue;
+			if ((off + 16) < e)
+				continue;
 		} else {
 			same = 0;
 			memcpy (last, (char*)buf+off, sizeof (last));
@@ -230,10 +231,10 @@ static bool dump_scsi (int command, u8 *buffer, int size)
 			if ((buffer[0] != 0) || (buffer[1] != 6))
 				return false;
 
-			printf (" (drive %s)", (buffer[3] & 0x80) ? "ro" : "rw");
+			printf (" (Drive %s)", (buffer[3] & 0x80) ? "RO" : "RW");
 			return true;
 		case 0x1e:		// PREVENT ALLOW MEDIUM REMOVAL
-			break;
+			return true;
 		case 0x23:		// READ FORMAT CAPACITIES
 			break;
 		case 0x25:		// READ CAPACITY(10)
@@ -247,6 +248,7 @@ static bool dump_scsi (int command, u8 *buffer, int size)
 			printf (" (%d zeros)", size);
 			return true;
 		default:
+			printf ("\n");
 			dump_hex (buffer, 0, size);
 			break;
 	}
@@ -1037,8 +1039,11 @@ static void listen (FILE *f)
 	u8 buffer[128];
 	usbmon_packet usb;
 	int count;
-	u8 *collected = NULL;
+	u8 *data_sent = NULL;
+	u8 *data_recv = NULL;
 	int command = -1;
+	int record = 0;
+	int total_bytes = 0;
 	//char output_usb[128];
 	struct current_state current = { send, 0, 0, 0, 0, 0, 0 };
 
@@ -1052,6 +1057,9 @@ static void listen (FILE *f)
 			exit (1);
 		}
 
+		record++;
+		total_bytes += count;
+
 		if (!valid_usbmon (&usb)) {
 			printf ("XXX invalid usbmon packet\n");
 			break;
@@ -1059,6 +1067,7 @@ static void listen (FILE *f)
 
 		if (usb.len_cap) {
 			count = fread (buffer, 1, usb.len_cap, f);
+			total_bytes += count;
 		} else {
 			count = 0;
 		}
@@ -1089,15 +1098,39 @@ static void listen (FILE *f)
 				current.tag      = *(u32 *)(buffer+4);
 				current.xfer_len = *(u32 *)(buffer+8);
 				current.done = 0;
+
+#if 0
+				if (current.command == 0xdb) {
+					dump_usbmon (&usb);
+					if (usb.len_cap > 0) {
+						//dump_csw (&usb, buffer);
+						dump_cbw (buffer);
+					}
+				}
+#endif
+
 				if (current.xfer_len) {
-					collected = calloc (1, current.xfer_len);
-					if (!collected)
+					data_recv = calloc (1, current.xfer_len);
+					if (!data_recv)
 						CONTINUE;
-					memset (collected, 0xdd, current.xfer_len);	//XXX temporary
+					memset (data_recv, 0xdd, current.xfer_len);	//XXX temporary
 				}
 
 				//printf ("SCSI 0x%02x %s SEND", current.command, scsi_get_command(current.command));
-				printf ("SCSI 0x%02x %s S", current.command, scsi_get_command(current.command));
+				printf ("0x%05x %4d 0x%02x %s S", total_bytes-48-usb.len_cap, record, current.command, scsi_get_command(current.command));
+
+				if (command == 0xdb) {
+					int size = usb.len_cap-15;
+					data_sent = malloc (size);
+					if (!data_sent)
+						CONTINUE;
+					memcpy (data_sent, buffer+usb.len_cap-size, size);
+#if 0
+					printf ("\n");
+					dump_hex (data_sent, 0, size);
+					printf ("\n");
+#endif
+				}
 
 				current.waiting_for = send_ack;
 				continue;
@@ -1123,8 +1156,22 @@ static void listen (FILE *f)
 					CONTINUE;
 				if (usb.length == 0)
 					CONTINUE;
+				/*
 				if (usb.len_cap != 0)
 					CONTINUE;
+				*/
+#if 0
+				if (current.command == 0xdb) {
+					dump_usbmon (&usb);
+				}
+#endif
+#if 0
+				if (usb.len_cap != 0) {
+					printf ("recv\n");
+					dump_hex (buffer, 0, usb.len_cap);
+					printf ("\n");
+				}
+#endif
 				current.urb_len  = usb.length;
 				current.data_len = usb.len_cap;
 				//printf (" RECV");
@@ -1134,14 +1181,23 @@ static void listen (FILE *f)
 			case recv_ack:
 				if (usb.type != 'C')
 					CONTINUE;
+				/*
 				if (usb.length != usb.len_cap)
 					CONTINUE;
+				*/
 				if (current.urb_len != usb.length)
 					CONTINUE;
 
 				//printf (" ACK ");
 				printf ("✓");
-				memcpy (collected+current.done, buffer, usb.len_cap);
+#if 0
+				if (current.command == 0xdb) {
+					printf ("\ndone = %d, size = %d, xfer = %d, len_cap = %d\n", current.done, usb.len_cap, current.xfer_len, usb.len_cap);
+					dump_hex (buffer, current.done, usb.len_cap);
+					printf ("\n");
+				}
+#endif
+				memcpy (data_recv+current.done, buffer, usb.len_cap);
 				current.done += usb.len_cap;
 				if (current.done >= current.xfer_len) {
 					// We've got all the data, now
@@ -1168,19 +1224,31 @@ static void listen (FILE *f)
 				//printf (" ACK");
 				printf ("✓");
 				printf (" (%s)", (buffer[12] == 0) ? "SUCCESS" : "FAILURE");
-				if (dump_scsi (current.command, collected, current.xfer_len)) {
-					//data is processed
+
+				if (current.command > 0xd0) {
 					printf ("\n");
+					dump_hex (data_sent, 0, 16);
+					printf ("\n");
+					//printf ("%d 0x%x\n", current.xfer_len-13, current.xfer_len-13);
+					dump_hex (data_recv+13, 0, current.xfer_len-13);
 				} else {
-					printf ("\n");
-					dump_hex (collected, 0, current.xfer_len);
+					if (dump_scsi (current.command, data_recv, current.xfer_len)) {
+						//data is processed
+						printf ("\n");
+					}
 				}
+
 				current.command  = 0;
 				current.urb_len  = 0;
 				current.data_len = 0;
 				current.done     = 0;
 				current.tag      = 0;
 				current.waiting_for = send;
+
+				free (data_sent);
+				free (data_recv);
+				data_recv = NULL;
+				//printf ("0x%05x\n", total_bytes);
 				continue;
 		}
 
@@ -1203,7 +1271,7 @@ static void listen (FILE *f)
 
 		dump_hex (buffer, 0, usb.len_cap);
 		if (want > 0) {
-			memcpy (collected + done, buffer, usb.len_cap);
+			memcpy (data_recv + done, buffer, usb.len_cap);
 			want -= usb.len_cap;
 			done += usb.len_cap;
 			//log_info ("done = %d, want = %d\n", done, want);
@@ -1214,36 +1282,36 @@ static void listen (FILE *f)
 				int disk = 0;
 
 				if (done == 0x238) {	// VENDOR 0xDA
-					switch (collected[0x230]) {
+					switch (data_recv[0x230]) {
 						case 0x10: type = "Dir";     break;
 						case 0x20: type = "File";    break;
 						default:   type = "Unknown"; break;
 					}
 
-					disk = collected[0] & 0x0F;
+					disk = data_recv[0] & 0x0F;
 					log_info ("Disk: %d\n", disk);
 
 					log_info ("%s: ", type);
-					dump_string (collected + 4);
+					dump_string (data_recv + 4);
 
-					size = (collected[0x210]) + (collected[0x211]<<8) + (collected[0x212]<<16) + (collected[0x213]<<24);
+					size = (data_recv[0x210]) + (data_recv[0x211]<<8) + (data_recv[0x212]<<16) + (data_recv[0x213]<<24);
 					printf ("Size: %ld\n", size);
 				} else if (done == 0x20C) {	// VENDOR 0xDB
-					disk = collected[0] & 0x0F;
+					disk = data_recv[0] & 0x0F;
 					log_info ("Disk: %d\n", disk);
 
 					log_info ("Listing: ");
-					dump_string (collected + 4);
+					dump_string (data_recv + 4);
 				} else if (done == 0x2800) {	// VENDOR 0xDA status
 					log_info ("Status:\n");
-					dump_string (collected + 4);
+					dump_string (data_recv + 4);
 				} else {
 					log_info ("Unknown: ");
-					dump_string (collected + 4);
+					dump_string (data_recv + 4);
 				}
-				//log_hex (collected + 0x210, 0, done - 0x210);
-				log_info ("%02x %02x %02x %02x\n", collected[0], collected[1], collected[2], collected[3]);
-				log_hex (collected, 0, done);
+				//log_hex (data_recv + 0x210, 0, done - 0x210);
+				log_info ("%02x %02x %02x %02x\n", data_recv[0], data_recv[1], data_recv[2], data_recv[3]);
+				log_hex (data_recv, 0, done);
 			}
 		} else {
 			//dump_hex (buffer, 0, usb.len_cap);
