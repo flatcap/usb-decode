@@ -102,7 +102,7 @@ int main (int argc, char *argv[])
 				next = i - 5;
 				memset (filename, 0, sizeof (filename));
 				//sprintf (filename, "out/%llx", *(u64 *)(addr + place));
-				sprintf (filename, "out/%06d", count);
+				sprintf (filename, "out/%05d", count);
 				count++;
 				fd_out = open (filename, O_WRONLY | O_APPEND | O_CREAT, S_IRUSR | S_IWUSR);
 				if (fd_out < 0)
