@@ -63,6 +63,7 @@ enum fsm {
 struct current_state {
 	enum fsm waiting_for;
 	int      command;
+	int      sub_command;
 	int      tag;
 	u32      xfer_len;
 	u32      urb_len;
@@ -125,6 +126,7 @@ static void dump_hex (void *buf, int start, int length)
 	}
 }
 
+#if 0
 /**
  * dump_string
  */
@@ -140,7 +142,9 @@ static void dump_string (u8 *data)
 	//log_info ("\n");
 }
 
+#endif
 
+#if 0
 /**
  * save_data
  */
@@ -165,7 +169,7 @@ static void save_data (bool direction, u8 *data, int length)
 	file_count++;
 }
 
-#if 0
+#endif
 /**
  * scsi_dump_sense
  */
@@ -284,7 +288,6 @@ static bool dump_scsi (int cmd, u8 *buffer, int size)
 	return false;
 }
 
-#endif
 /**
  * scsi_get_command
  */
@@ -1060,6 +1063,7 @@ static void dump_usbmon (usbmon *u)
 
 #endif
 
+#if 0
 /**
  * dump_filename
  */
@@ -1080,6 +1084,7 @@ static void dump_filename (u8 *data, int size)
 	printf ("\"\n");
 }
 
+#endif
 
 /**
  * listen
@@ -1093,11 +1098,13 @@ static void listen (FILE *f)
 	int record = 0;
 	unsigned int total_bytes = 0;
 	//char output_usb[128];
-	struct current_state current = { command, 0, 0, 0, 0, 0, 0 };
+	struct current_state current = { command, 0, 0, 0, 0, 0, 0, 0, 0 };
 	command_block_wrapper *cbw = NULL;
+	u8 vendor[16];
 
 	while (!feof (f)) {
 		memset (buffer, 0xdd, sizeof (buffer));		// XXX temporary
+		memset (&usb,   0xdd, sizeof (usb));		// XXX temporary
 
 		count = fread (&usb, 1, sizeof (usbmon), f);
 		if (count < sizeof (usbmon)) {
@@ -1143,16 +1150,26 @@ static void listen (FILE *f)
 				if (usb.length != usb.len_cap)
 					CONTINUE;
 
-				current.urb_len  = usb.length;
-				current.data_len = usb.len_cap;
-				current.tag      = *(u32 *)(buffer+4);	// XXX define a ptr32
-				current.xfer_len = *(u32 *)(buffer+8);
-				current.done     = 0;
-				current.send     = (cbw->bmCBWFlags == 0);
+				current.urb_len     = usb.length;
+				current.data_len    = usb.len_cap;
+				current.tag         = *(u32 *)(buffer+4);	// XXX define a ptr32
+				current.xfer_len    = *(u32 *)(buffer+8);
+				current.done        = 0;
+				current.send        = (cbw->bmCBWFlags == 0);
 
+				memset (vendor, 0xdd, sizeof (vendor));
+
+				if (current.command > 0xd0) {
+					memcpy (vendor, cbw->CBWCB, cbw->bCBWCBLength);
+					current.sub_command = vendor[1];
+				} else {
+					current.sub_command = 0;
+				}
+#if 0
 				if (current.command == 0xda)
 					printf ("XXX START\n");
-				printf ("0x%06lx %4d 0x%02x %s C", total_bytes-sizeof (usbmon)-usb.len_cap, record, current.command, scsi_get_command(current.command));
+#endif
+				printf ("0x%06lx %4d 0x%02x.%02x %s C", total_bytes-sizeof (usbmon)-usb.len_cap, record, current.command, current.sub_command, scsi_get_command(current.command));
 
 				current.waiting_for = command_ack;
 				break;
@@ -1230,8 +1247,18 @@ static void listen (FILE *f)
 			case status_ack:
 				if (usb.type != 'C') CONTINUE;
 
-				printf ("✓\n");
+				printf ("✓");
 
+				if (!dump_scsi (current.command, data, current.xfer_len)) {
+					// do something else
+				}
+
+				printf ("\n");
+				if (current.command > 0xd0) {
+					printf ("Vendor\n");
+					dump_hex (vendor, 0, 7);
+					printf ("\n");
+				}
 				if (current.xfer_len > 0) {
 #if 0
 					bool colour = true;
@@ -1252,15 +1279,19 @@ static void listen (FILE *f)
 						printf ("\e[0m");
 #endif
 
+#if 0
 					if (data[4] && (current.command == 0xda) && ((current.xfer_len == 0x230) || (current.xfer_len == 0x238))) {
 						dump_hex (data+0x220, 0, 0x10);
 						//printf ("\t0x%04x", current.xfer_len);
 						dump_filename (data, current.xfer_len);
 						//save_data (current.send, data, current.xfer_len);
 					}
+#endif
 
+#if 0
 					if (current.command == 0xda)
 						printf ("XXX STOP\n");
+#endif
 
 					free (data);
 					data = NULL;
