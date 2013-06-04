@@ -1,0 +1,18 @@
+digraph fsm {
+	command -> command_ack
+
+	command_ack -> send
+	command_ack -> receive
+	command_ack -> status
+
+	send -> send_ack
+	send_ack -> send
+	send_ack -> status
+
+	receive -> receive_ack
+	receive_ack -> receive
+	receive_ack -> status
+
+	status -> status_ack
+}
+
