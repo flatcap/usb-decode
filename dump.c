@@ -1044,7 +1044,7 @@ static void listen (FILE *f)
 	u8 buffer[128];		// Should get size from the device descriptor
 	usbmon usb;
 	unsigned int count;
-	//u8 *data = NULL;
+	u8 *data = NULL;
 	int record = 0;
 	unsigned int total_bytes = 0;
 	//char output_usb[128];
@@ -1114,6 +1114,11 @@ static void listen (FILE *f)
 
 				printf ("✓");
 				if (current.xfer_len > 0) {
+					data = calloc (1, current.xfer_len);
+					if (!data)
+						CONTINUE;
+					memset (data, 0xdd, current.xfer_len);	//XXX temporary
+
 					if (current.send) {
 						current.waiting_for = send;
 					} else {				// device to host
@@ -1125,16 +1130,21 @@ static void listen (FILE *f)
 				break;
 			case send:
 				if (usb.type != 'S') CONTINUE;
+				if (data == NULL) CONTINUE;
 
 				printf ("S");
+
 				// copy data
-				current.done += usb.len_cap;
+				memcpy (data+current.done, buffer, usb.len_cap);
+
 				current.waiting_for = send_ack;
 				break;
 			case send_ack:
 				if (usb.type != 'C') CONTINUE;
+				if (data == NULL) CONTINUE;
 
 				printf ("✓");
+				current.done += usb.length;
 				if (current.done >= current.xfer_len) {
 					current.waiting_for = status;
 				} else {
@@ -1143,15 +1153,20 @@ static void listen (FILE *f)
 				break;
 			case receive:
 				if (usb.type != 'S') CONTINUE;
+				if (data == NULL) CONTINUE;
 
 				printf ("R");
 				current.waiting_for = receive_ack;
 				break;
 			case receive_ack:
 				if (usb.type != 'C') CONTINUE;
+				if (data == NULL) CONTINUE;
 
 				printf ("✓");
+
 				// copy data
+				memcpy (data+current.done, buffer,  usb.len_cap);
+
 				current.done += usb.len_cap;
 				if (current.done >= current.xfer_len) {
 					current.waiting_for = status;
@@ -1169,6 +1184,28 @@ static void listen (FILE *f)
 				if (usb.type != 'C') CONTINUE;
 
 				printf ("✓\n");
+
+				if (current.xfer_len > 0) {
+					bool colour = false;
+
+					if (current.send) {
+						if (colour)
+							printf ("\e[32m");
+						else
+							printf ("Host to device:\n");
+					} else {
+						if (colour)
+							printf ("\e[01;31m");
+						else
+							printf ("Device to host:\n");
+					}
+					dump_hex (data, 0, current.xfer_len);
+					if (colour)
+						printf ("\e[0m");
+
+					free (data);
+					data = NULL;
+				}
 				current.waiting_for = command;
 				break;
 
