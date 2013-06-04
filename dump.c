@@ -45,12 +45,14 @@ int error_max   = 0;
  * enum fsm
  */
 enum fsm {
+	command,
+	command_ack,
 	send,
 	send_ack,
-	recv,
-	recv_ack,
-	rcpt,
-	rcpt_ack
+	receive,
+	receive_ack,
+	status,
+	status_ack
 };
 
 /**
@@ -64,6 +66,7 @@ struct current_state {
 	u32      urb_len;
 	u32      data_len;
 	u32      done;
+	bool     send;		// else receive
 };
 
 
@@ -138,6 +141,7 @@ static void dump_string (u8 *data)
 
 #endif
 
+#if 0
 /**
  * scsi_dump_sense
  */
@@ -210,11 +214,11 @@ static bool scsi_dump_sense (u8 *buffer, int size)
  *
  * can we display the info succinctly?
  */
-static bool dump_scsi (int command, u8 *buffer, int size)
+static bool dump_scsi (int cmd, u8 *buffer, int size)
 {
 	int i;
 
-	switch (command) {
+	switch (cmd) {
 		case 0x00:		// TEST UNIT READY
 			// no data
 			return true;
@@ -256,6 +260,7 @@ static bool dump_scsi (int command, u8 *buffer, int size)
 	return false;
 }
 
+#endif
 /**
  * scsi_get_command
  */
@@ -280,7 +285,7 @@ static const char *scsi_get_command (u8 id)
 /**
  * valid_cdb_6
  */
-static int valid_cdb_6 (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
+static int valid_cdb_6 (usbmon *u, command_block_wrapper *cbw, u8 *buffer)
 {
 	unsigned int i;
 
@@ -356,7 +361,7 @@ static int valid_cdb_6 (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer
 /**
  * valid_cdb_10
  */
-static int valid_cdb_10 (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
+static int valid_cdb_10 (usbmon *u, command_block_wrapper *cbw, u8 *buffer)
 {
 	unsigned int i;
 
@@ -413,7 +418,7 @@ static int valid_cdb_10 (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffe
 /**
  * valid_cdb_vendor
  */
-static int valid_cdb_vendor (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
+static int valid_cdb_vendor (usbmon *u, command_block_wrapper *cbw, u8 *buffer)
 {
 	unsigned int i;
 
@@ -443,7 +448,7 @@ static int valid_cdb_vendor (usbmon_packet *u, command_block_wrapper *cbw, u8 *b
 /**
  * valid_cdb
  */
-static int valid_cdb (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
+static int valid_cdb (usbmon *u, command_block_wrapper *cbw, u8 *buffer)
 {
 	if (!u || !cbw || !buffer)
 		RETURN (-1);
@@ -462,7 +467,7 @@ static int valid_cdb (usbmon_packet *u, command_block_wrapper *cbw, u8 *buffer)
 /**
  * valid_cbw
  */
-static int valid_cbw (usbmon_packet *u, u8 *buffer)
+static int valid_cbw (usbmon *u, u8 *buffer)
 {
 	// These fields could contain any value:
 	//	dCBWTag, dCBWDataTransferLength
@@ -480,7 +485,7 @@ static int valid_cbw (usbmon_packet *u, u8 *buffer)
 	if (strncmp (cbw->dCBWSignature, "USBC", 4) != 0)
 		RETURN (-1);
 
-	if ((cbw->bmCBWFlags != 0) && (cbw->bmCBWFlags != 0x80))
+	if ((cbw->bmCBWFlags != 0x00) && (cbw->bmCBWFlags != 0x80))
 		RETURN (-1);
 
 	if (cbw->bCBWLUN > 15)
@@ -496,7 +501,7 @@ static int valid_cbw (usbmon_packet *u, u8 *buffer)
 /**
  * valid_csw
  */
-static bool valid_csw (usbmon_packet *u, u8 *buffer)
+static bool valid_csw (usbmon *u, u8 *buffer)
 {
 	// This field could contain any value:
 	//	dCSWTag
@@ -524,7 +529,7 @@ static bool valid_csw (usbmon_packet *u, u8 *buffer)
 /**
  * valid_dd
  */
-static bool valid_dd (usbmon_packet *usb, u8 *data)
+static bool valid_dd (usbmon *usb, u8 *data)
 {
 	if (usb->epnum != 0x80)		// Inbound traffic
 		return (false);
@@ -576,7 +581,7 @@ static bool valid_dd (usbmon_packet *usb, u8 *data)
 /**
  * valid_req_sense
  */
-static bool valid_req_sense (usbmon_packet *u, u8 *buffer)
+static bool valid_req_sense (usbmon *u, u8 *buffer)
 {
 	if (!u || !buffer)
 		RETURN (false);
@@ -589,7 +594,7 @@ static bool valid_req_sense (usbmon_packet *u, u8 *buffer)
 /**
  * valid_usbmon
  */
-static bool valid_usbmon (usbmon_packet *u)
+static bool valid_usbmon (usbmon *u)
 {
 	if (!u)
 		RETURN (false);
@@ -758,7 +763,7 @@ static void dump_csw (u8 *buffer)
 /**
  * dump_dd
  */
-static bool dump_dd (usbmon_packet *usb, u8 *data)
+static bool dump_dd (usbmon *usb, u8 *data)
 {
 	if (!usb || !data)
 		return (false);
@@ -817,7 +822,7 @@ static void dump_req_sense (u8 *buffer)
 /**
  * dump_usbmon_one
  */
-static void dump_usbmon_one (usbmon_packet *u, char *output)
+static void dump_usbmon_one (usbmon *u, char *output)
 {
 	int index = 0;
 	char *xfer;
@@ -910,7 +915,7 @@ static void dump_usbmon_one (usbmon_packet *u, char *output)
 /**
  * dump_usbmon
  */
-static void dump_usbmon (usbmon_packet *u)
+static void dump_usbmon (usbmon *u)
 {
 	char time_buf[64];
 	struct tm *tm = NULL;
@@ -1036,25 +1041,22 @@ static void dump_usbmon (usbmon_packet *u)
  */
 static void listen (FILE *f)
 {
-	u8 buffer[128];
-	usbmon_packet usb;
-	int count;
-	u8 *data_sent = NULL;
-	u8 *data_recv = NULL;
-	int command = -1;
+	u8 buffer[128];		// Should get size from the device descriptor
+	usbmon usb;
+	unsigned int count;
+	//u8 *data = NULL;
 	int record = 0;
-	int total_bytes = 0;
+	unsigned int total_bytes = 0;
 	//char output_usb[128];
-	struct current_state current = { send, 0, 0, 0, 0, 0, 0 };
+	struct current_state current = { command, 0, 0, 0, 0, 0, 0 };
+	command_block_wrapper *cbw = NULL;
 
 	while (!feof (f)) {
-		memset (buffer, 0xdd, sizeof (buffer));
+		memset (buffer, 0xdd, sizeof (buffer));		// XXX temporary
 
-		count = fread (&usb, 1, 48, f);
-		if (count < 48) {
-			if (count == 0 && feof (f))
-				break;
-			exit (1);
+		count = fread (&usb, 1, sizeof (usbmon), f);
+		if (count < sizeof (usbmon)) {
+			break;
 		}
 
 		record++;
@@ -1065,11 +1067,17 @@ static void listen (FILE *f)
 			break;
 		}
 
+		if (usb.len_cap > sizeof (buffer)) {
+			RETURN();
+		}
+
 		if (usb.len_cap) {
 			count = fread (buffer, 1, usb.len_cap, f);
 			total_bytes += count;
+			cbw = (command_block_wrapper *) buffer;
 		} else {
 			count = 0;
+			cbw = NULL;
 		}
 
 		//dump_usbmon (&usb);
@@ -1077,6 +1085,94 @@ static void listen (FILE *f)
 		//printf ("%s\n", output_usb);
 
 		switch (current.waiting_for) {
+			case command:
+				if (usb.type != 'S') CONTINUE;
+
+				current.command = valid_cbw (&usb, buffer);
+				if (current.command < 0) {
+					printf ("XXX FSM(%d)\n", __LINE__);
+					dump_hex (&usb, 0, sizeof (usbmon));
+					CONTINUE;
+				}
+
+				if (usb.length != usb.len_cap)
+					CONTINUE;
+
+				current.urb_len  = usb.length;
+				current.data_len = usb.len_cap;
+				current.tag      = *(u32 *)(buffer+4);	// XXX define a ptr32
+				current.xfer_len = *(u32 *)(buffer+8);
+				current.done     = 0;
+				current.send     = (cbw->bmCBWFlags == 0);
+
+				printf ("0x%05lx %4d 0x%02x %s C", total_bytes-sizeof (usbmon)-usb.len_cap, record, current.command, scsi_get_command(current.command));
+
+				current.waiting_for = command_ack;
+				break;
+			case command_ack:
+				if (usb.type != 'C') CONTINUE;
+
+				printf ("✓");
+				if (current.xfer_len > 0) {
+					if (current.send) {
+						current.waiting_for = send;
+					} else {				// device to host
+						current.waiting_for = receive;
+					}
+				} else {
+					current.waiting_for = status;
+				}
+				break;
+			case send:
+				if (usb.type != 'S') CONTINUE;
+
+				printf ("S");
+				// copy data
+				current.done += usb.len_cap;
+				current.waiting_for = send_ack;
+				break;
+			case send_ack:
+				if (usb.type != 'C') CONTINUE;
+
+				printf ("✓");
+				if (current.done >= current.xfer_len) {
+					current.waiting_for = status;
+				} else {
+					current.waiting_for = send;
+				}
+				break;
+			case receive:
+				if (usb.type != 'S') CONTINUE;
+
+				printf ("R");
+				current.waiting_for = receive_ack;
+				break;
+			case receive_ack:
+				if (usb.type != 'C') CONTINUE;
+
+				printf ("✓");
+				// copy data
+				current.done += usb.len_cap;
+				if (current.done >= current.xfer_len) {
+					current.waiting_for = status;
+				} else {
+					current.waiting_for = receive;
+				}
+				break;
+			case status:
+				if (usb.type != 'S') CONTINUE;
+
+				printf ("?");
+				current.waiting_for = status_ack;
+				break;
+			case status_ack:
+				if (usb.type != 'C') CONTINUE;
+
+				printf ("✓\n");
+				current.waiting_for = command;
+				break;
+
+#if 0
 			case send:
 				if (usb.type != 'S') {
 					CONTINUE;
@@ -1085,7 +1181,7 @@ static void listen (FILE *f)
 				command = valid_cbw (&usb, buffer);
 				if (command < 0) {
 					printf ("XXX FSM(%d)\n", __LINE__);
-					dump_hex (&usb, 0, 48);
+					dump_hex (&usb, 0, sizeof (usbmon));
 					CONTINUE;
 				}
 
@@ -1117,7 +1213,7 @@ static void listen (FILE *f)
 				}
 
 				//printf ("SCSI 0x%02x %s SEND", current.command, scsi_get_command(current.command));
-				printf ("0x%05x %4d 0x%02x %s S", total_bytes-48-usb.len_cap, record, current.command, scsi_get_command(current.command));
+				printf ("0x%05lx %4d 0x%02x %s S", total_bytes-sizeof (usbmon)-usb.len_cap, record, current.command, scsi_get_command(current.command));
 
 				if (command == 0xdb) {
 					int size = usb.len_cap-15;
@@ -1146,12 +1242,12 @@ static void listen (FILE *f)
 				//printf (" ACK");
 				printf ("✓");
 				if (current.xfer_len) {
-					current.waiting_for = recv;
+					current.waiting_for = receive;
 				} else {
-					current.waiting_for = rcpt;
+					current.waiting_for = status;
 				}
 				continue;
-			case recv:
+			case receive:
 				if (usb.type != 'S')
 					CONTINUE;
 				if (usb.length == 0)
@@ -1176,9 +1272,9 @@ static void listen (FILE *f)
 				current.data_len = usb.len_cap;
 				//printf (" RECV");
 				printf ("R");
-				current.waiting_for = recv_ack;
+				current.waiting_for = receive_ack;
 				continue;
-			case recv_ack:
+			case receive_ack:
 				if (usb.type != 'C')
 					CONTINUE;
 				/*
@@ -1201,22 +1297,22 @@ static void listen (FILE *f)
 				current.done += usb.len_cap;
 				if (current.done >= current.xfer_len) {
 					// We've got all the data, now
-					current.waiting_for = rcpt;
+					current.waiting_for = status;
 				} else {
 					// We want more data
-					current.waiting_for = recv;
+					current.waiting_for = receive;
 				}
 				continue;
-			case rcpt:
+			case status:
 				if (usb.type != 'S')
 					CONTINUE;
-				//printf (" RCPT");
+				//printf (" FOOT");
 				printf ("X");
 				current.urb_len  = usb.length;
 				current.data_len = usb.len_cap;
-				current.waiting_for = rcpt_ack;
+				current.waiting_for = status_ack;
 				continue;
-			case rcpt_ack:
+			case status_ack:
 				if (usb.type != 'C')
 					CONTINUE;
 				if (current.urb_len != usb.length)
@@ -1250,75 +1346,9 @@ static void listen (FILE *f)
 				data_recv = NULL;
 				//printf ("0x%05x\n", total_bytes);
 				continue;
-		}
-
-		continue;
-#if 0
-		if (valid_dd (&usb, buffer)) {
-			dump_dd (&usb, buffer);
-			continue;
-		}
-
-		if (valid_csw (&usb, buffer)) {
-			dump_csw (buffer);
-			continue;
-		}
-
-		if (valid_req_sense (&usb, buffer)) {
-			dump_req_sense (buffer);
-			continue;
-		}
-
-		dump_hex (buffer, 0, usb.len_cap);
-		if (want > 0) {
-			memcpy (data_recv + done, buffer, usb.len_cap);
-			want -= usb.len_cap;
-			done += usb.len_cap;
-			//log_info ("done = %d, want = %d\n", done, want);
-
-			if (want <= 0) {
-				long size = 0;
-				char *type = NULL;
-				int disk = 0;
-
-				if (done == 0x238) {	// VENDOR 0xDA
-					switch (data_recv[0x230]) {
-						case 0x10: type = "Dir";     break;
-						case 0x20: type = "File";    break;
-						default:   type = "Unknown"; break;
-					}
-
-					disk = data_recv[0] & 0x0F;
-					log_info ("Disk: %d\n", disk);
-
-					log_info ("%s: ", type);
-					dump_string (data_recv + 4);
-
-					size = (data_recv[0x210]) + (data_recv[0x211]<<8) + (data_recv[0x212]<<16) + (data_recv[0x213]<<24);
-					printf ("Size: %ld\n", size);
-				} else if (done == 0x20C) {	// VENDOR 0xDB
-					disk = data_recv[0] & 0x0F;
-					log_info ("Disk: %d\n", disk);
-
-					log_info ("Listing: ");
-					dump_string (data_recv + 4);
-				} else if (done == 0x2800) {	// VENDOR 0xDA status
-					log_info ("Status:\n");
-					dump_string (data_recv + 4);
-				} else {
-					log_info ("Unknown: ");
-					dump_string (data_recv + 4);
-				}
-				//log_hex (data_recv + 0x210, 0, done - 0x210);
-				log_info ("%02x %02x %02x %02x\n", data_recv[0], data_recv[1], data_recv[2], data_recv[3]);
-				log_hex (data_recv, 0, done);
-			}
-		} else {
-			//dump_hex (buffer, 0, usb.len_cap);
-		}
 #endif
+		}
 	}
-
 }
 
 

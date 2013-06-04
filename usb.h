@@ -21,9 +21,9 @@
 #include "usbtypes.h"
 
 /**
- * struct usbmon_packet - 64 bytes
+ * struct usbmon - 64 bytes
  */
-typedef struct _usbmon_packet
+typedef struct _usbmon
 {
 	u64  id;		/*  0: URB ID - from submission to callback */
 	u8   type;		/*  8: Same as text; extensible. */
@@ -39,11 +39,7 @@ typedef struct _usbmon_packet
 	u32  length;		/* 32: Length of data (submitted or actual) */
 	u32  len_cap;		/* 36: Delivered length */
 	u8   setup[8];		/* 40: Only for Control S-type */
-	int  interval;		/* 48: Only for Interrupt and ISO */
-	int  start_frame;	/* 52: For ISO */
-	u32  xfer_flags;	/* 56: copy of URB's transfer_flags */
-	u32  ndesc;		/* 60: Actual number of ISO descriptors */
-} __attribute__((__packed__)) usbmon_packet;
+} __attribute__((__packed__)) usbmon;
 
 /**
  * struct usbmon_setup - 8 bytes
