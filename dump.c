@@ -38,6 +38,8 @@
 int error_count = 0;
 int error_max   = 0;
 
+int file_count = 1;
+
 #define RETURN(retval)	{ log_error ("\e[31mTest failed: %s(%d)\e[0m\n", __FUNCTION__, __LINE__); error_count++; if (error_count > error_max) exit (1); return retval; }
 #define CONTINUE	{ log_error ("\e[31mTest failed: %s(%d)\e[0m\n", __FUNCTION__, __LINE__); error_count++; if (error_count > error_max) exit (1); continue; }
 
@@ -123,7 +125,6 @@ static void dump_hex (void *buf, int start, int length)
 	}
 }
 
-#if 0
 /**
  * dump_string
  */
@@ -136,10 +137,33 @@ static void dump_string (u8 *data)
 			break;
 		log_info ("%c", data[2*i]);
 	}
-	log_info ("\n");
+	//log_info ("\n");
 }
 
-#endif
+
+/**
+ * save_data
+ */
+static void save_data (bool direction, u8 *data, int length)
+{
+	char name[64];
+	FILE *f = NULL;
+	int count;
+
+	//sprintf (name, "dir/%04d.%c.bin", file_count, direction ? 's' : 'r');
+	sprintf (name, "dir/%04d.bin", file_count);
+
+	f = fopen (name, "w+");
+	if (!f)
+		RETURN();
+
+	count = fwrite (data, length, 1, f);
+	if (count != 1)
+		RETURN();
+
+	fclose (f);
+	file_count++;
+}
 
 #if 0
 /**
@@ -1037,6 +1061,27 @@ static void dump_usbmon (usbmon *u)
 #endif
 
 /**
+ * dump_filename
+ */
+static void dump_filename (u8 *data, int size)
+{
+	bool file = false;
+
+	printf ("\t%s  ", (data[0] == 1) ? "Int" : "SD ");
+	if (size == 0x230)
+		file = true;
+
+	if ((size == 0x238) && (data[0x230]) == 0x20)
+		file = true;
+
+	printf ("%s  ", file ? "file" : "dir ");
+	printf ("%9lld  \"", *(u64 *)(data + 528));
+	dump_string (data + 4);
+	printf ("\"\n");
+}
+
+
+/**
  * listen
  */
 static void listen (FILE *f)
@@ -1105,7 +1150,9 @@ static void listen (FILE *f)
 				current.done     = 0;
 				current.send     = (cbw->bmCBWFlags == 0);
 
-				printf ("0x%05lx %4d 0x%02x %s C", total_bytes-sizeof (usbmon)-usb.len_cap, record, current.command, scsi_get_command(current.command));
+				if (current.command == 0xda)
+					printf ("XXX START\n");
+				printf ("0x%06lx %4d 0x%02x %s C", total_bytes-sizeof (usbmon)-usb.len_cap, record, current.command, scsi_get_command(current.command));
 
 				current.waiting_for = command_ack;
 				break;
@@ -1186,7 +1233,8 @@ static void listen (FILE *f)
 				printf ("✓\n");
 
 				if (current.xfer_len > 0) {
-					bool colour = false;
+#if 0
+					bool colour = true;
 
 					if (current.send) {
 						if (colour)
@@ -1202,6 +1250,17 @@ static void listen (FILE *f)
 					dump_hex (data, 0, current.xfer_len);
 					if (colour)
 						printf ("\e[0m");
+#endif
+
+					if (data[4] && (current.command == 0xda) && ((current.xfer_len == 0x230) || (current.xfer_len == 0x238))) {
+						dump_hex (data+0x220, 0, 0x10);
+						//printf ("\t0x%04x", current.xfer_len);
+						dump_filename (data, current.xfer_len);
+						//save_data (current.send, data, current.xfer_len);
+					}
+
+					if (current.command == 0xda)
+						printf ("XXX STOP\n");
 
 					free (data);
 					data = NULL;
