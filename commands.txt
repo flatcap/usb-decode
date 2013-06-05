@@ -32,11 +32,19 @@ Command 0xdb.00 SEND
 		0x238 lists files and dirs
 
 Command 0xda.01 RECV	recv disk, file/dir, name, size, junk(fixed)
-	Send:
-	byte[0]		disk number
-	byte[1,2,3]	padding
-	byte[4...]	file/dir name
-	...		zero padding to 0x220 bytes
+	Receive:
+		byte[0]		disk number
+		byte[1,2,3]	padding
+		byte[4...]	file/dir name
+		...		zero padding to 0x220 bytes
+
+		if (size == 0x238)
+		byte[0x210-0x213] file size (64 bits)
+		byte[0x230]	type 0x10 => dir, 0x20 => file
+	Notes:
+		packet size == 0x230 => this is a file
+		for the 0x238 byte packet there's 16 bytes of junk at 0x220 (seems constant)
+			DF C6 00 A6 5F 70 01 30 - 47 34 30 44 53 48 50 27  .... p.0G40DSHP'
 
 Command 0xdb.02 SEND	send type (4 bytes), filename to retrieve, 4 bytes at end
 
