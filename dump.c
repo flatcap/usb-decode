@@ -81,13 +81,15 @@ static void dump_hex (void *buf, int start, int length)
 	int off, i, s, e;
 	u8 *mem = buf;
 
+#if 0
 	unsigned char last[16];
 	int same = 0;
+#endif
 	s =  start                & ~15;	// round down
 	e = (start + length + 15) & ~15;	// round up
 
 	for (off = s; off < e; off += 16) {
-
+#if 0
 		if (memcmp ((char*)buf+off, last, sizeof (last)) == 0) {
 			if (!same) {
 				printf ("	        ...\n");
@@ -99,6 +101,7 @@ static void dump_hex (void *buf, int start, int length)
 			same = 0;
 			memcpy (last, (char*)buf+off, sizeof (last));
 		}
+#endif
 
 		if (off == s)
 			printf("	%6.6x ", start);
@@ -939,6 +942,7 @@ static void dump_usbmon_one (usbmon *u, char *output)
 	}
 }
 
+#endif
 /**
  * dump_usbmon
  */
@@ -950,7 +954,7 @@ static void dump_usbmon (usbmon *u)
 	char *xfer;
 	char *setup;
 	char *present;
-	char *status;
+	char *state;
 
 	if (!u)
 		return;
@@ -983,10 +987,10 @@ static void dump_usbmon (usbmon *u)
 	}
 
 	switch (u->status) {
-		case    0: status = "Success";                                  break;
-		case  -32: status = "Broken pipe (-EPIPE)";                     break;
-		case -115: status = "Operation now in progress (-EINPROGRESS)"; break;
-		default:   status = "Unknown";                                  break;
+		case    0: state = "Success";                                  break;
+		case  -32: state = "Broken pipe (-EPIPE)";                     break;
+		case -115: state = "Operation now in progress (-EINPROGRESS)"; break;
+		default:   state = "Unknown";                                  break;
 	}
 
 	//printf ("\e[32mUSB Block\e[0m\n");
@@ -1012,7 +1016,7 @@ static void dump_usbmon (usbmon *u)
 	strftime (time_buf, sizeof (time_buf), "%Y-%m-%d %H:%M:%S", tm);
 	//printf ("URB Time: %s.%06d\n", time_buf, u->ts_usec);
 #endif
-	printf ("URB status: %s (%d)\n", status, u->status);
+	printf ("URB status: %s (%d)\n", state, u->status);
 	printf ("URB length: %d\n", u->length);
 	printf ("Data length: %d\n", u->len_cap);
 	//printf ("	xfer_flags: %d\n", u->xfer_flags);
@@ -1061,7 +1065,6 @@ static void dump_usbmon (usbmon *u)
 	}
 }
 
-#endif
 
 #if 0
 /**
@@ -1132,7 +1135,21 @@ static void listen (FILE *f)
 			cbw = NULL;
 		}
 
-		//dump_usbmon (&usb);
+		if (usb.xfer_type != 3)	{		// bulk
+			//printf ("XXX xfer_type = %d\n", usb.xfer_type);
+			continue;
+		}
+
+#if 0
+		dump_usbmon (&usb);
+		printf ("\n");
+		if (usb.len_cap) {
+			dump_hex (buffer, 0, usb.len_cap);
+			printf ("\n");
+		}
+		continue;
+#endif
+
 		//dump_usbmon_one (&usb, output_usb);
 		//printf ("%s\n", output_usb);
 
@@ -1143,6 +1160,7 @@ static void listen (FILE *f)
 				current.command = valid_cbw (&usb, buffer);
 				if (current.command < 0) {
 					printf ("XXX FSM(%d)\n", __LINE__);
+					dump_usbmon (&usb);
 					dump_hex (&usb, 0, sizeof (usbmon));
 					CONTINUE;
 				}
@@ -1178,7 +1196,7 @@ static void listen (FILE *f)
 
 				printf ("✓");
 				if (current.xfer_len > 0) {
-					data = calloc (1, current.xfer_len);
+					data = calloc (1, current.xfer_len+32);
 					if (!data)
 						CONTINUE;
 					memset (data, 0xdd, current.xfer_len);	//XXX temporary
@@ -1199,6 +1217,10 @@ static void listen (FILE *f)
 				printf ("S");
 
 				// copy data
+				if ((current.done + usb.len_cap) > current.xfer_len) {
+					printf ("\nZZZ xfer = %d, done = %d, size = %d\n", current.xfer_len, current.done, usb.len_cap);
+					CONTINUE;
+				}
 				memcpy (data+current.done, buffer, usb.len_cap);
 
 				current.waiting_for = send_ack;
@@ -1229,6 +1251,10 @@ static void listen (FILE *f)
 				printf ("✓");
 
 				// copy data
+				if ((current.done + usb.len_cap) > current.xfer_len) {
+					printf ("\nZZZ xfer = %d, done = %d, size = %d\n", current.xfer_len, current.done, usb.len_cap);
+					//CONTINUE;
+				}
 				memcpy (data+current.done, buffer,  usb.len_cap);
 
 				current.done += usb.len_cap;
@@ -1253,12 +1279,13 @@ static void listen (FILE *f)
 					// do something else
 				}
 
-				printf ("\n");
 				if (current.command > 0xd0) {
-					printf ("Vendor\n");
+					printf ("Vendor 0x%02x.%02x\n", vendor[0], vendor[1]);
 					dump_hex (vendor, 0, 7);
 					printf ("\n");
 				}
+				printf ("\n");
+
 				if (current.xfer_len > 0) {
 #if 0
 					bool colour = true;
@@ -1287,12 +1314,6 @@ static void listen (FILE *f)
 						//save_data (current.send, data, current.xfer_len);
 					}
 #endif
-
-#if 0
-					if (current.command == 0xda)
-						printf ("XXX STOP\n");
-#endif
-
 					free (data);
 					data = NULL;
 				}
