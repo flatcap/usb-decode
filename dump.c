@@ -1290,8 +1290,12 @@ static void listen (FILE *f)
 							break;
 						case 0x01:
 							dump_filename (data, current.xfer_len);
-							//dump_hex (data, 0, current.xfer_len);
 							break;
+#if 0
+						case 0x03:
+							printf (" Receive file");
+							break;
+#endif
 						case 0x05:
 							printf (" Select: %3s/", ((data[0] & 0x0F) == 0x01) ? "Int" : "SD");
 							dump_string (data + 4);
