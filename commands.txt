@@ -78,17 +78,21 @@ Command 0xdb.05 SEND - Select file/dir
 		byte[4...]	file/dir name
 		...		junk?
 
-Command 0xdb.06 SEND	send: "__noSuchFile.txt", plus lots of junk
+Command 0xdb.06 SEND - UNKNOWN
 	Command:
 		7 bytes - DB 07 00 00 02 0C 00
 		byte[0] == 0xDB		vendor command
-		byte[1] == 0x06		vendor command - rename file/dir
+		byte[1] == 0x06		vendor command - UNKNOWN
 		byte[2] == 0x00		padding
 		byte[3] == 0x00		padding
 		byte[4,5] = 0x20C	size of packet to be returned
 		byte[6] == 0x00		padding?
 		...			junk?
 	Send:
+		byte[0]		disk number
+		byte[1,2,3]	padding
+		byte[4...]	file name "__noSuchFile.txt"
+		...		junk?
 
 Command 0xdb.07 SEND - Rename file/dir
 	Command:
@@ -116,11 +120,18 @@ Command 0xdb.08 SEND - Make directory
 		byte[4,5] = 0x20C	size of packet to be returned
 		byte[6] == 0x00		padding?
 		...			junk?
-	Send
+	Send:
 		byte[0]		disk number
 		byte[1,2,3]	padding
 		byte[4...]	file/dir name
 		...		junk?
+	Notes:
+		To create a directory:
+			0xDB/0x06 - request a non-existant file
+			0x03      - SCSI request sense
+			0xDB/0x08 - make directory
+			0x03      - SCSI request sense
+		Possibly to ensure that both sides flush any cached data
 
 Command 0xdb.09 SEND	send type (4 bytes), directory name, lot of junk 
 
