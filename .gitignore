@@ -1,3 +1,4 @@
+# build products
 attach
 bulk
 detach
@@ -10,3 +11,21 @@ usb_list
 usbmon
 watcher
 xusb
+
+# junk
+append.c
+backup.sh
+cdb.h
+devices2
+endians.h
+highlight.vim
+languages.txt
+merge.sh
+move.vim
+move2.vim
+ntfs_time.c
+ntfstime.h
+split.awk
+status.xml
+usbmon.txt
+usbtypes.h
