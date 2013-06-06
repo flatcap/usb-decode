@@ -3,9 +3,10 @@ attach
 bulk
 detach
 dump
+dump_old
 ioctl
 mmap
-out
+scsi
 usb
 usb_list
 usbmon
@@ -25,6 +26,7 @@ move.vim
 move2.vim
 ntfs_time.c
 ntfstime.h
+out
 split.awk
 status.xml
 usbmon.txt
