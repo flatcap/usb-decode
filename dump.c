@@ -1190,7 +1190,7 @@ static void listen (FILE *f)
 					printf ("XXX START\n");
 #endif
 				//XXX don't print the sub command for scsi commands
-				printf ("0x%06lx %5d 0x%02x.%02x %s C", total_bytes-sizeof (usbmon)-usb.len_cap, record, current.command, current.sub_command, scsi_get_command(current.command));
+				printf ("0x%06lx %05d 0x%02x.%02x %s C", total_bytes-sizeof (usbmon)-usb.len_cap, record, current.command, current.sub_command, scsi_get_command(current.command));
 
 				current.waiting_for = command_ack;
 				break;
@@ -1291,11 +1291,18 @@ static void listen (FILE *f)
 						case 0x01:
 							dump_filename (data, current.xfer_len);
 							break;
-#if 0
-						case 0x03:
-							printf (" Receive file");
+						case 0x02:
+							if (data[0] == 0x84)
+								printf (" Get status info");
+							else
+								printf (" Select: %3s/", ((data[0] & 0x0F) == 0x01) ? "Int" : "SD");
 							break;
-#endif
+						case 0x03:
+							printf (" Download file");
+							break;
+						case 0x04:
+							printf (" Upload file");
+							break;
 						case 0x05:
 							printf (" Select: %3s/", ((data[0] & 0x0F) == 0x01) ? "Int" : "SD");
 							dump_string (data + 4);

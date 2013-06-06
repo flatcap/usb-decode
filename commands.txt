@@ -54,13 +54,58 @@ Command 0xda.01 RECV - File/Dir list
 	Notes:
 		packet size == 0x230 => this is a file
 		for the 0x238 byte packet there's 16 bytes of junk at 0x220 (seems constant)
-			DF C6 00 A6 5F 70 01 30 - 47 34 30 44 53 48 50 27  .... p.0G40DSHP'
+			DF C6 00 A6 5F 70 01 30 - 47 34 30 44 53 48 50 27  ...._p.0G40DSHP'
 
-Command 0xdb.02 SEND	send type (4 bytes), filename to retrieve, 4 bytes at end
+Command 0xdb.02 SEND - Select file for download / upload
+	Command:
+		7 bytes - DB 02 00 00 02 1C 00
+		byte[0] == 0xDB		vendor command
+		byte[1] == 0x02		vendor command - select file/dir
+		byte[2] == 0x00		padding
+		byte[3] == 0x00		padding
+		byte[4,5] = 0x20C	size of packet to be returned
+		byte[6] == 0x00		padding?
+		...			junk?
+	Send:
+		byte[0]		disk number
+		byte[1,2,3]	padding
+		byte[4...]	file name
+		...		junk?
+		byte[0x210-0x213] file size (64 bits)
+	Notes:
+		If disk number == 0x84 and file name == "STATUS", return status info in xml
 
-Command 0xda.03 RECV	recv file: 10KiB packet, 8KiB contents (concatenate to create file)
+
+Command 0xda.03 RECV - Download file
+	Command:
+		7 bytes - DA 03 00 00 28 00 00
+		byte[0] == 0xDB		vendor command
+		byte[1] == 0x03		vendor command - download file
+		byte[2] == 0x00		padding
+		byte[3] == 0x00		padding
+		byte[4,5] = 0x2800	size of packet to be returned
+		byte[6] == 0x00		padding?
+		...			junk?
+	Receive:
+		byte[...]		raw data
+	Notes:
+		The file is zero-padded to the end of the packet
+		Large files are split into 8KiB pieces wrapped in 10KiB packets
 
 Command 0xdb.04 SEND	send file (padded with junk) to 10KiB
+	Command:
+		7 bytes - DB 04 00 00 28 00 00
+		byte[0] == 0xDB		vendor command
+		byte[1] == 0x03		vendor command - upload file
+		byte[2] == 0x00		padding
+		byte[3] == 0x00		padding
+		byte[4,5] = 0x2800	size of packet to be returned
+		byte[6] == 0x00		padding?
+		...			junk?
+	Send:
+		byte[...]		raw data
+	Notes:
+		GPS seems happy to accept 10KiB packets with 10KiB of data in them
 
 Command 0xdb.05 SEND - Select file/dir
 	Command:
@@ -78,11 +123,11 @@ Command 0xdb.05 SEND - Select file/dir
 		byte[4...]	file/dir name
 		...		junk?
 
-Command 0xdb.06 SEND - UNKNOWN
+Command 0xdb.06 SEND - Delete file
 	Command:
 		7 bytes - DB 07 00 00 02 0C 00
 		byte[0] == 0xDB		vendor command
-		byte[1] == 0x06		vendor command - UNKNOWN
+		byte[1] == 0x06		vendor command - Delete file
 		byte[2] == 0x00		padding
 		byte[3] == 0x00		padding
 		byte[4,5] = 0x20C	size of packet to be returned
@@ -133,8 +178,21 @@ Command 0xdb.08 SEND - Make directory
 			0x03      - SCSI request sense
 		Possibly to ensure that both sides flush any cached data
 
-Command 0xdb.09 SEND	send type (4 bytes), directory name, lot of junk 
-
+Command 0xdb.09 SEND - Remove directory
+	Command:
+		7 bytes - DB 09 00 00 02 0C 00
+		byte[0] == 0xDB		vendor command
+		byte[1] == 0x09		vendor command - remove directory
+		byte[2] == 0x00		padding
+		byte[3] == 0x00		padding
+		byte[4,5] = 0x20C	size of packet to be returned
+		byte[6] == 0x00		padding?
+		...			junk?
+	Send:
+		byte[0]		disk number
+		byte[1,2,3]	padding
+		byte[4...]	file/dir name
+		...		junk?
 
 Status
 	type 0x84 (4 bytes)
