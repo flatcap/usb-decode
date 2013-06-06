@@ -129,7 +129,6 @@ static void dump_hex (void *buf, int start, int length)
 	}
 }
 
-#if 0
 /**
  * dump_string
  */
@@ -137,7 +136,7 @@ static void dump_string (u8 *data)
 {
 	int i;
 
-	for (i = 0; i < 64; i++) {
+	for (i = 0; i < 256; i++) {
 		if (!data[2*i])
 			break;
 		log_info ("%c", data[2*i]);
@@ -145,7 +144,6 @@ static void dump_string (u8 *data)
 	//log_info ("\n");
 }
 
-#endif
 
 #if 0
 /**
@@ -283,8 +281,8 @@ static bool dump_scsi (int cmd, u8 *buffer, int size)
 			printf (" (%d zeros)", size);
 			return true;
 		default:
-			printf ("\n");
-			dump_hex (buffer, 0, size);
+			//printf ("\n");
+			//dump_hex (buffer, 0, size);
 			break;
 	}
 
@@ -1065,8 +1063,6 @@ static void dump_usbmon (usbmon *u)
 	}
 }
 
-
-#if 0
 /**
  * dump_filename
  */
@@ -1074,20 +1070,26 @@ static void dump_filename (u8 *data, int size)
 {
 	bool file = false;
 
-	printf ("\t%s  ", (data[0] == 1) ? "Int" : "SD ");
+	if (data[4] == 0) {
+		printf (" [end marker]");
+		return;
+	}
+
+	printf (" %s ", (data[0] == 1) ? "Int" : "SD ");
 	if (size == 0x230)
 		file = true;
 
 	if ((size == 0x238) && (data[0x230]) == 0x20)
 		file = true;
 
-	printf ("%s  ", file ? "file" : "dir ");
-	printf ("%9lld  \"", *(u64 *)(data + 528));
+	printf ("%s ", file ? "file" : "dir ");
+	if (file)
+		printf ("%10lld ", *(u64 *)(data + 528));
+	else
+		printf ("           ");
 	dump_string (data + 4);
-	printf ("\"\n");
 }
 
-#endif
 
 /**
  * listen
@@ -1187,7 +1189,8 @@ static void listen (FILE *f)
 				if (current.command == 0xda)
 					printf ("XXX START\n");
 #endif
-				printf ("0x%06lx %4d 0x%02x.%02x %s C", total_bytes-sizeof (usbmon)-usb.len_cap, record, current.command, current.sub_command, scsi_get_command(current.command));
+				//XXX don't print the sub command for scsi commands
+				printf ("0x%06lx %5d 0x%02x.%02x %s C", total_bytes-sizeof (usbmon)-usb.len_cap, record, current.command, current.sub_command, scsi_get_command(current.command));
 
 				current.waiting_for = command_ack;
 				break;
@@ -1275,14 +1278,48 @@ static void listen (FILE *f)
 
 				printf ("✓");
 
-				if (!dump_scsi (current.command, data, current.xfer_len)) {
+				if (dump_scsi (current.command, data, current.xfer_len)) {
 					// do something else
-				}
-
-				if (current.command > 0xd0) {
-					printf ("Vendor 0x%02x.%02x\n", vendor[0], vendor[1]);
-					dump_hex (vendor, 0, 7);
-					printf ("\n");
+				} else if (current.command > 0xd0) {
+					switch (current.sub_command) {
+						case 0x00:
+							printf (" List dir: %3s/", ((data[0] & 0x0F) == 0x01) ? "Int" : "SD");
+							if ((data[0] & 0xF0) == 0x40) {
+								dump_string (data + 4);		// dirname present
+							}
+							break;
+						case 0x01:
+							dump_filename (data, current.xfer_len);
+							//dump_hex (data, 0, current.xfer_len);
+							break;
+						case 0x05:
+							printf (" Select: %3s/", ((data[0] & 0x0F) == 0x01) ? "Int" : "SD");
+							dump_string (data + 4);
+							break;
+						case 0x06:
+							printf (" Delete: %3s/", ((data[0] & 0x0F) == 0x01) ? "Int" : "SD");
+							dump_string (data + 4);
+							break;
+						case 0x07:
+							printf (" Rename: %3s/", ((data[0] & 0x0F) == 0x01) ? "Int" : "SD");
+							dump_string (data + 4);
+							break;
+						case 0x08:
+							printf (" Make dir: %3s/", ((data[0] & 0x0F) == 0x01) ? "Int" : "SD");
+							dump_string (data + 4);
+							break;
+						case 0x09:
+							printf (" Rm dir: %3s/", ((data[0] & 0x0F) == 0x01) ? "Int" : "SD");
+							dump_string (data + 4);
+							break;
+						default:
+#if 0
+							printf ("Vendor 0x%02x.%02x\n", vendor[0], vendor[1]);
+							dump_hex (vendor, 0, 7);
+							printf ("\n");
+#endif
+							break;
+					}
 				}
 				printf ("\n");
 
