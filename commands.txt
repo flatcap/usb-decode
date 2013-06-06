@@ -69,7 +69,7 @@ Command 0xdb.05 SEND - Select file/dir
 		byte[1] == 0x05		vendor command - select file/dir
 		byte[2] == 0x00		padding
 		byte[3] == 0x00		padding
-		byte[4,5] = 0x2C0	size of packet to be returned
+		byte[4,5] = 0x20C	size of packet to be returned
 		byte[6] == 0x00		padding?
 		...			junk?
 	Send:
@@ -79,15 +79,25 @@ Command 0xdb.05 SEND - Select file/dir
 		...		junk?
 
 Command 0xdb.06 SEND	send: "__noSuchFile.txt", plus lots of junk
+	Command:
+		7 bytes - DB 07 00 00 02 0C 00
+		byte[0] == 0xDB		vendor command
+		byte[1] == 0x06		vendor command - rename file/dir
+		byte[2] == 0x00		padding
+		byte[3] == 0x00		padding
+		byte[4,5] = 0x20C	size of packet to be returned
+		byte[6] == 0x00		padding?
+		...			junk?
+	Send:
 
 Command 0xdb.07 SEND - Rename file/dir
 	Command:
 		7 bytes - DB 07 00 00 02 0C 00
 		byte[0] == 0xDB		vendor command
-		byte[1] == 0x05		vendor command - rename file/dir
+		byte[1] == 0x07		vendor command - rename file/dir
 		byte[2] == 0x00		padding
 		byte[3] == 0x00		padding
-		byte[4,5] = 0x2C0	size of packet to be returned
+		byte[4,5] = 0x20C	size of packet to be returned
 		byte[6] == 0x00		padding?
 		...			junk?
 	Send:
@@ -96,7 +106,21 @@ Command 0xdb.07 SEND - Rename file/dir
 		byte[4...]	file/dir name
 		...		junk?
 
-Command 0xdb.08 SEND	send type (4 bytes), directory name (probably mkdir), lot of junk 
+Command 0xdb.08 SEND - Make directory
+	Command:
+		7 bytes - DB 07 00 00 02 0C 00
+		byte[0] == 0xDB		vendor command
+		byte[1] == 0x08		vendor command - make directory
+		byte[2] == 0x00		padding
+		byte[3] == 0x00		padding
+		byte[4,5] = 0x20C	size of packet to be returned
+		byte[6] == 0x00		padding?
+		...			junk?
+	Send
+		byte[0]		disk number
+		byte[1,2,3]	padding
+		byte[4...]	file/dir name
+		...		junk?
 
 Command 0xdb.09 SEND	send type (4 bytes), directory name, lot of junk 
 
