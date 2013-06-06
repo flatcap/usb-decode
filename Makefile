@@ -20,7 +20,7 @@ all: tags $(PROGS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(PROGS) tags
+	rm -f $(PROGS) tags dump_old
 
 tags:	phony
 	ctags dump.c usb.h usbtypes.h
