@@ -1,6 +1,6 @@
 CC	= gcc
 
-PROGS	= bulk dump ioctl mmap usb usb_list usbmon xusb detach attach scsi
+PROGS	= bulk dump ioctl mmap usb usb_list usbmon xusb detach attach scsi status control
 
 PACKAGES = libusb-1.0
 

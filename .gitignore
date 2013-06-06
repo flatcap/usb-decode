@@ -7,6 +7,7 @@ dump_old
 ioctl
 mmap
 scsi
+status
 usb
 usb_list
 usbmon
