@@ -92,7 +92,7 @@ Command 0xda.03 RECV - Download file
 		The file is zero-padded to the end of the packet
 		Large files are split into 8KiB pieces wrapped in 10KiB packets
 
-Command 0xdb.04 SEND	send file (padded with junk) to 10KiB
+Command 0xdb.04 SEND - Upload file
 	Command:
 		7 bytes - DB 04 00 00 28 00 00
 		byte[0] == 0xDB		vendor command

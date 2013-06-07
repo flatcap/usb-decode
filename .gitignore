@@ -1,6 +1,7 @@
 # build products
 attach
 bulk
+control
 detach
 dump
 dump_old
@@ -18,6 +19,7 @@ xusb
 append.c
 backup.sh
 cdb.h
+const.h
 devices2
 endians.h
 highlight.vim

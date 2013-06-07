@@ -672,6 +672,9 @@ static bool valid_usbmon (usbmon *u)
 		printf ("XXX status = %d\n", u->status);
 		RETURN (false);
 	}
+	// Also seen:
+	//	ECONNRESET	104	/* Connection reset by peer */
+	//	EREMOTEIO	121	/* Remote I/O error */
 
 	if (u->length > 64) {		// XXX validate this against the device descriptor
 		printf ("XXX length = %d\n", u->length);
